@@ -17,15 +17,15 @@ Err errno;
 
 #ifdef RETROWEB_BUILD
 #define APP_NAME             "RetroWEB Browser"
-#define APP_VERSION          "0.1.19"
+#define APP_VERSION          "0.1.20"
 #define HOME_URL             "http://retroweb.bjrno.com/?img=inline"
-#define USER_AGENT           "RetroWEBBrowser/0.1.19 (PalmOS 4)"
+#define USER_AGENT           "RetroWEBBrowser/0.1.20 (PalmOS 4)"
 #define PREF_CREATOR         'RtWB'
 #else
 #define APP_NAME             "RetroModem Browser"
-#define APP_VERSION          "0.1.19"
+#define APP_VERSION          "0.1.20"
 #define HOME_URL             "http://search.retromodem/"
-#define USER_AGENT           "RetroModemBrowser/0.1.19 (PalmOS 4)"
+#define USER_AGENT           "RetroModemBrowser/0.1.20 (PalmOS 4)"
 #define PREF_CREATOR         'RwBr'
 #endif
 #define HTTP_PORT            80
@@ -82,6 +82,7 @@ static UInt16 gImageFailureCount = 0;
 static Char gLastImageError[64];
 static Boolean gPendingNavigation = false;
 static Char gPendingNavigationUrl[ADDRESS_MAX + 1];
+static UInt16 gPendingMenuItem = 0;
 static Boolean gDisconnectRequested = false;
 static Char gStatusScratch[40];
 /* Large temporary buffers must not live on the tiny Palm OS 68K stack. */
@@ -208,6 +209,33 @@ static Boolean ScrollFromPen(Coord screenX, Coord screenY, Boolean trackPen)
     return true;
 }
 
+static void QueuePendingMenuEvent(void)
+{
+    EventType event;
+    if (!gPendingMenuItem) return;
+    MemSet(&event, sizeof(event), 0);
+    event.eType = menuEvent;
+    event.data.menu.itemID = gPendingMenuItem;
+    gPendingMenuItem = 0;
+    EvtAddEventToQueue(&event);
+}
+
+static void SelectMenuWhileLoading(UInt16 itemID)
+{
+    if (itemID == MenuDisconnect) {
+        gDisconnectRequested = true;
+        gPendingNavigation = false;
+        gPendingMenuItem = 0;
+        gAbortRequested = true;
+        SetStatus("Cancelling - closing connection...");
+        return;
+    }
+    gPendingNavigation = false;
+    gPendingMenuItem = itemID;
+    gAbortRequested = true;
+    SetStatus("Stopping load for menu command...");
+}
+
 static void PumpLoadingEvents(void)
 {
     EventType event;
@@ -221,6 +249,10 @@ static void PumpLoadingEvents(void)
             gStopRequested = true;
             continue;
         }
+        if (event.eType == menuEvent) {
+            SelectMenuWhileLoading(event.data.menu.itemID);
+            continue;
+        }
         if (event.eType == keyDownEvent && GetPageBounds(&bounds)) {
             if (event.data.keyDown.chr == pageUpChr) {
                 DocumentScroll(gDocument, -bounds.extent.y + 12, bounds.extent.y);
@@ -231,13 +263,6 @@ static void PumpLoadingEvents(void)
             } else {
                 if (SysHandleEvent(&event)) continue;
                 if (MenuHandleEvent(NULL, &event, &menuError)) continue;
-                if (event.eType == menuEvent &&
-                    event.data.menu.itemID == MenuDisconnect) {
-                    gDisconnectRequested = true;
-                    gPendingNavigation = false;
-                    gAbortRequested = true;
-                    SetStatus("Cancelling - closing connection...");
-                }
             }
         } else if ((event.eType == penDownEvent || event.eType == penMoveEvent) &&
                    ScrollFromPen(event.screenX, event.screenY, false)) {
@@ -259,17 +284,6 @@ static void PumpLoadingEvents(void)
         } else {
             if (SysHandleEvent(&event)) continue;
             if (MenuHandleEvent(NULL, &event, &menuError)) continue;
-            if (event.eType == menuEvent) {
-                if (event.data.menu.itemID == MenuDisconnect) {
-                    gDisconnectRequested = true;
-                    gPendingNavigation = false;
-                    gAbortRequested = true;
-                    SetStatus("Cancelling - closing connection...");
-                } else {
-                    SndPlaySystemSound(sndWarning);
-                    SetStatus("Loading - Disconnect is available");
-                }
-            }
         }
     }
 }
@@ -1139,6 +1153,7 @@ static Boolean Navigate(const Char *url, Boolean addHistory)
             }
             SetStatus("Cancelled - disconnected");
             DrawDocument();
+            QueuePendingMenuEvent();
             return false;
         }
         SetPageText(errorText);
@@ -1161,6 +1176,7 @@ static Boolean Navigate(const Char *url, Boolean addHistory)
             return Navigate(gVisibleUrl, true);
         }
         SetStatus("Cancelled - disconnected");
+        QueuePendingMenuEvent();
         return false;
     }
     DrawDocument();
@@ -1180,6 +1196,7 @@ static Boolean Navigate(const Char *url, Boolean addHistory)
             return Navigate(gVisibleUrl, true);
         }
         SetStatus("Cancelled - disconnected");
+        QueuePendingMenuEvent();
         return false;
     }
     if (!gImagesEnabled) SetStatus("Page loaded - images are off");
@@ -1221,6 +1238,7 @@ static Boolean NavigatePost(const Char *url, const Char *postBody)
             }
             SetStatus("Cancelled - disconnected");
             DrawDocument();
+            QueuePendingMenuEvent();
             return false;
         }
         SetPageText(errorText);
@@ -1243,6 +1261,7 @@ static Boolean NavigatePost(const Char *url, const Char *postBody)
             return Navigate(gVisibleUrl, true);
         }
         SetStatus("Cancelled - disconnected");
+        QueuePendingMenuEvent();
         return false;
     }
     DrawDocument();
@@ -1262,6 +1281,7 @@ static Boolean NavigatePost(const Char *url, const Char *postBody)
             return Navigate(gVisibleUrl, true);
         }
         SetStatus("Cancelled - disconnected");
+        QueuePendingMenuEvent();
         return false;
     }
     if (!gImagesEnabled) SetStatus("Page loaded - images are off");
