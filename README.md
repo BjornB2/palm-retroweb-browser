@@ -10,6 +10,13 @@ content suitable for old devices.
 The browser itself only needs an ordinary Palm network connection and HTTP.
 HTTPS, modern HTML and image conversion are handled by RetroWEB.
 
+![Björns Blog with an inline GIF in RetroWEB Browser](assets/screenshots/bjornsblog-palm-4x.png)
+
+![A Björns Blog article link below the inline GIF](assets/screenshots/bjornsblog-article-4x.png)
+
+The screenshots are rendered at the Palm IIIc's native 160 by 160 pixel
+resolution and enlarged with nearest-neighbour scaling for display on GitHub.
+
 ## Features
 
 - HTTP/1.0 networking through Palm NetLib
