@@ -1,0 +1,125 @@
+#include "resources.h"
+
+#ifdef RETROWEB_BUILD
+APPLICATIONICONNAME ID 1000 "RetroWEB"
+#else
+APPLICATIONICONNAME ID 1000 "RBrowser"
+#endif
+
+FORM ID MainForm AT (0 0 160 160)
+MENUID MainMenu
+BEGIN
+    GADGET ID StatusLabel AT (0 0 160 14) USABLE
+    GADGET ID PageGadget AT (2 16 146 140) USABLE
+    SCROLLBAR ID PageScrollBar AT (151 16 7 140) VALUE 0 MIN 0 MAX 0 PAGESIZE 140
+END
+
+MENU ID MainMenu
+BEGIN
+    PULLDOWN "Page"
+    BEGIN
+        MENUITEM "Open Address..." ID MenuOpenAddress "G"
+        MENUITEM "Home" ID MenuHome
+        MENUITEM "Reload" ID MenuReload "R"
+        MENUITEM SEPARATOR
+        MENUITEM "Add Bookmark" ID MenuAddBookmark "A"
+        MENUITEM "Page Info" ID MenuPageInfo
+    END
+    PULLDOWN "Go"
+    BEGIN
+        MENUITEM "Back" ID MenuBack
+        MENUITEM "Forward" ID MenuForward
+        MENUITEM SEPARATOR
+        MENUITEM "Bookmarks" ID MenuBookmarks "B"
+        MENUITEM "History" ID MenuHistory "H"
+    END
+    PULLDOWN "Network"
+    BEGIN
+        MENUITEM "Connect" ID MenuConnect
+        MENUITEM "Disconnect" ID MenuDisconnect
+    END
+    PULLDOWN "Options"
+    BEGIN
+        MENUITEM "Images: Inline" ID MenuImagesInline
+        MENUITEM "Images: Off" ID MenuImagesLinks
+        MENUITEM SEPARATOR
+        MENUITEM "Preferences" ID MenuPreferences
+#ifdef RETROWEB_BUILD
+        MENUITEM "About RetroWEB Browser" ID MenuAbout
+#else
+        MENUITEM "About RetroModem Browser" ID MenuAbout
+#endif
+    END
+END
+
+ALERT ID AboutAlert
+INFORMATION
+BEGIN
+#ifdef RETROWEB_BUILD
+    TITLE "RetroWEB Browser"
+    MESSAGE "RetroWEB Browser 0.1.0\nA basic Palm OS web browser powered by RetroWEB.\n\nretroweb.bjrno.com"
+#else
+    TITLE "RetroModem Browser"
+    MESSAGE "RetroModem Browser 0.1.17\nA Palm OS companion for RetroModem.\n\nsearch.retromodem"
+#endif
+    BUTTONS "OK"
+END
+
+ALERT ID MessageAlert
+INFORMATION
+BEGIN
+#ifdef RETROWEB_BUILD
+    TITLE "RetroWEB Browser"
+#else
+    TITLE "RetroModem Browser"
+#endif
+    MESSAGE "^1"
+    BUTTONS "OK"
+END
+
+FORM ID PlacesForm AT (0 0 160 160)
+BEGIN
+    TITLE "Bookmarks"
+    LIST "" ID PlacesList AT (2 17 156 105) USABLE
+    BUTTON "Open" ID PlacesOpenButton AT (2 130 40 13) LEFTANCHOR FRAME FONT 0
+    BUTTON "Delete" ID PlacesDeleteButton AT (48 130 45 13) LEFTANCHOR FRAME FONT 0
+    BUTTON "Cancel" ID PlacesCancelButton AT (108 130 48 13) LEFTANCHOR FRAME FONT 0
+END
+
+FORM ID InputForm AT (0 0 160 160)
+BEGIN
+    TITLE "Enter text"
+    LABEL "Value:" ID 1499 AT (5 24) FONT 0
+    FIELD ID InputField AT (5 38 150 45) FONT 0 MULTIPLELINES MAXCHARS 127 UNDERLINED
+    BUTTON "OK" ID InputOKButton AT (25 96 45 14) LEFTANCHOR FRAME FONT 0
+    BUTTON "Cancel" ID InputCancelButton AT (88 96 48 14) LEFTANCHOR FRAME FONT 0
+    GRAFFITISTATEINDICATOR AT (145 150)
+END
+
+FORM ID PreferencesForm AT (0 0 160 160)
+BEGIN
+    TITLE "Preferences"
+    CHECKBOX "Load inline images" ID ImagesCheckbox AT (5 18 105 12) GROUP 0 USABLE LEFTANCHOR
+    BUTTON "Save" ID PreferencesOKButton AT (25 52 45 14) LEFTANCHOR FRAME FONT 0
+    BUTTON "Cancel" ID PreferencesCancelButton AT (88 52 48 14) LEFTANCHOR FRAME FONT 0
+    GRAFFITISTATEINDICATOR AT (145 150)
+END
+
+FORM ID AddressForm AT (0 0 160 160)
+BEGIN
+    TITLE "Open Address"
+    LABEL "Address:" ID 1699 AT (5 22) FONT 0
+    FIELD ID AddressEntryField AT (5 36 150 48) FONT 0 MULTIPLELINES MAXCHARS 255 UNDERLINED
+    BUTTON "Open" ID AddressOKButton AT (25 96 45 14) LEFTANCHOR FRAME FONT 0
+    BUTTON "Cancel" ID AddressCancelButton AT (88 96 48 14) LEFTANCHOR FRAME FONT 0
+    GRAFFITISTATEINDICATOR AT (145 150)
+END
+
+#ifdef RETROWEB_BUILD
+VERSION ID 1 "0.1.0"
+VERSION ID 1000 "0.1.0"
+#else
+VERSION ID 1 "0.1.17"
+VERSION ID 1000 "0.1.17"
+#endif
+

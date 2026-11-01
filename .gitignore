@@ -1,0 +1,8 @@
+build/
+dist/
+*.o
+*.grc
+*.bin
+*.prc
+.DS_Store
+
