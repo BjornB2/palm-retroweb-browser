@@ -10,8 +10,8 @@ FORM ID MainForm AT (0 0 160 160)
 MENUID MainMenu
 BEGIN
     GADGET ID StatusLabel AT (0 0 160 14) USABLE
-    GADGET ID PageGadget AT (2 16 146 140) USABLE
-    SCROLLBAR ID PageScrollBar AT (151 16 7 140) VALUE 0 MIN 0 MAX 0 PAGESIZE 140
+    GADGET ID PageGadget AT (2 16 146 144) USABLE
+    SCROLLBAR ID PageScrollBar AT (151 16 7 144) VALUE 0 MIN 0 MAX 0 PAGESIZE 144
 END
 
 MENU ID MainMenu
@@ -57,10 +57,10 @@ INFORMATION
 BEGIN
 #ifdef RETROWEB_BUILD
     TITLE "RetroWEB Browser"
-    MESSAGE "RetroWEB Browser 0.1.17\nA basic Palm OS web browser powered by RetroWEB.\n\nretroweb.bjrno.com"
+    MESSAGE "RetroWEB Browser 0.1.19\nA basic Palm OS web browser powered by RetroWEB.\n\nretroweb.bjrno.com"
 #else
     TITLE "RetroModem Browser"
-    MESSAGE "RetroModem Browser 0.1.17\nA Palm OS companion for RetroModem.\n\nsearch.retromodem"
+    MESSAGE "RetroModem Browser 0.1.19\nA Palm OS companion for RetroModem.\n\nsearch.retromodem"
 #endif
     BUTTONS "OK"
 END
@@ -116,10 +116,10 @@ BEGIN
 END
 
 #ifdef RETROWEB_BUILD
-VERSION ID 1 "0.1.17"
-VERSION ID 1000 "0.1.17"
+VERSION ID 1 "0.1.19"
+VERSION ID 1000 "0.1.19"
 #else
-VERSION ID 1 "0.1.17"
-VERSION ID 1000 "0.1.17"
+VERSION ID 1 "0.1.19"
+VERSION ID 1000 "0.1.19"
 #endif
 

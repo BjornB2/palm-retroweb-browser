@@ -17,15 +17,15 @@ Err errno;
 
 #ifdef RETROWEB_BUILD
 #define APP_NAME             "RetroWEB Browser"
-#define APP_VERSION          "0.1.17"
+#define APP_VERSION          "0.1.19"
 #define HOME_URL             "http://retroweb.bjrno.com/?img=inline"
-#define USER_AGENT           "RetroWEBBrowser/0.1.17 (PalmOS 4)"
+#define USER_AGENT           "RetroWEBBrowser/0.1.19 (PalmOS 4)"
 #define PREF_CREATOR         'RtWB'
 #else
 #define APP_NAME             "RetroModem Browser"
-#define APP_VERSION          "0.1.17"
+#define APP_VERSION          "0.1.19"
 #define HOME_URL             "http://search.retromodem/"
-#define USER_AGENT           "RetroModemBrowser/0.1.17 (PalmOS 4)"
+#define USER_AGENT           "RetroModemBrowser/0.1.19 (PalmOS 4)"
 #define PREF_CREATOR         'RwBr'
 #endif
 #define HTTP_PORT            80
@@ -166,13 +166,53 @@ static void DrawDocument(void)
     }
 }
 
+/* Palm OS turns taps on a standard scrollbar track into page jumps before the
+ * form handler sees them.  Intercept the pen directly so the full track maps
+ * to the full document and dragging gives pixel-level positioning. */
+static Boolean ScrollFromPen(Coord screenX, Coord screenY, Boolean trackPen)
+{
+    RectangleType bounds;
+    Int32 maximum;
+    Int32 target;
+    Boolean penDown;
+    Coord penX;
+    Coord penY;
+    Coord lastY;
+
+    if (!gDocument || screenX < 148 || !GetPageBounds(&bounds) ||
+        screenY < bounds.topLeft.y ||
+        screenY >= bounds.topLeft.y + bounds.extent.y) return false;
+
+    penX = screenX;
+    penY = screenY;
+    lastY = -1;
+    penDown = true;
+    do {
+        if (penY < bounds.topLeft.y) penY = bounds.topLeft.y;
+        if (penY >= bounds.topLeft.y + bounds.extent.y)
+            penY = bounds.topLeft.y + bounds.extent.y - 1;
+        if (penY != lastY) {
+            maximum = gDocument->contentHeight > bounds.extent.y ?
+                      gDocument->contentHeight - bounds.extent.y : 0;
+            target = bounds.extent.y > 1 ?
+                     ((Int32)(penY - bounds.topLeft.y) * maximum) /
+                     (bounds.extent.y - 1) : 0;
+            gDocument->scrollY = (Coord)target;
+            DrawDocument();
+            lastY = penY;
+        }
+        if (!trackPen) break;
+        EvtResetAutoOffTimer();
+        EvtGetPen(&penX, &penY, &penDown);
+    } while (penDown);
+    return true;
+}
+
 static void PumpLoadingEvents(void)
 {
     EventType event;
     UInt16 menuError;
     RectangleType bounds;
-    Int32 maximum;
-    Int32 target;
     for (;;) {
         EvtGetEvent(&event, 0);
         if (event.eType == nilEvent) break;
@@ -200,15 +240,7 @@ static void PumpLoadingEvents(void)
                 }
             }
         } else if ((event.eType == penDownEvent || event.eType == penMoveEvent) &&
-                   event.screenX >= 148 && GetPageBounds(&bounds) &&
-                   event.screenY >= bounds.topLeft.y &&
-                   event.screenY < bounds.topLeft.y + bounds.extent.y) {
-            maximum = gDocument->contentHeight > bounds.extent.y ?
-                      gDocument->contentHeight - bounds.extent.y : 0;
-            target = ((Int32)(event.screenY - bounds.topLeft.y) * maximum) /
-                     bounds.extent.y;
-            gDocument->scrollY = (Coord)target;
-            DrawDocument();
+                   ScrollFromPen(event.screenX, event.screenY, false)) {
         } else if (event.eType == sclRepeatEvent &&
                    event.data.sclRepeat.scrollBarID == PageScrollBar) {
             gDocument->scrollY = event.data.sclRepeat.newValue;
@@ -1646,6 +1678,8 @@ static void AppEventLoop(void)
     UInt16 error;
     do {
         EvtGetEvent(&event, evtWaitForever);
+        if (event.eType == penDownEvent &&
+            ScrollFromPen(event.screenX, event.screenY, true)) continue;
         if (!SysHandleEvent(&event) && !MenuHandleEvent(NULL, &event, &error) &&
             !AppHandleEvent(&event)) FrmDispatchEvent(&event);
     } while (event.eType != appStopEvent);
