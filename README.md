@@ -1,8 +1,10 @@
 # RetroWEB Browser for Palm OS
 
 RetroWEB Browser is a small, native, open-source web browser for classic Palm
-OS handhelds. It targets the colour Palm IIIc running Palm OS 4.0 or 4.1 and
-uses [RetroWEB](http://retroweb.bjrno.com/) to turn modern pages and images into
+OS handhelds with basic inline image support—an uncommon capability among
+browsers that still run on the colour Palm IIIc. It renders the first frame of
+GIF87a/GIF89a images directly on Palm OS 4.0 or 4.1 and uses
+[RetroWEB](http://retroweb.bjrno.com/) to convert modern pages and images into
 content suitable for old devices.
 
 The browser itself only needs an ordinary Palm network connection and HTTP.
