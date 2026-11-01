@@ -2,8 +2,10 @@ MODEM_APP := RBrowser
 WEB_APP := RetroWEBBrowser
 MODEM_CREATOR := RwBr
 WEB_CREATOR := RtWB
-MODEM_DB_VERSION := 30
-WEB_DB_VERSION := 30
+MODEM_DB_NAME := RBrowser 0.1.21
+WEB_DB_NAME := RetroWEB 0.1.21
+MODEM_DB_VERSION := 31
+WEB_DB_VERSION := 31
 BUILD := build
 MODEM_BUILD := $(BUILD)/modem
 WEB_BUILD := $(BUILD)/retroweb
@@ -53,13 +55,13 @@ $(DIST)/$(MODEM_APP).prc: $(MODEM_BUILD)/$(MODEM_APP) $(RESOURCE) | $(DIST)
 	cd $(MODEM_BUILD) && $(OBJRES) $(MODEM_APP)
 	cd $(MODEM_BUILD) && $(PILRC) -I ../../src ../../$(RESOURCE)
 	cd $(MODEM_BUILD) && $(BUILDPRC) --ok-to-install-newer -v $(MODEM_DB_VERSION) \
-		../../$@ "Retroweb Browser" $(MODEM_CREATOR) *.grc *.bin
+		../../$@ "$(MODEM_DB_NAME)" $(MODEM_CREATOR) *.grc *.bin
 
 $(DIST)/$(WEB_APP).prc: $(WEB_BUILD)/$(WEB_APP) $(RESOURCE) | $(DIST)
 	cd $(WEB_BUILD) && $(OBJRES) $(WEB_APP)
 	cd $(WEB_BUILD) && $(PILRC) -I ../../src -D RETROWEB_BUILD ../../$(RESOURCE)
 	cd $(WEB_BUILD) && $(BUILDPRC) --ok-to-install-newer -v $(WEB_DB_VERSION) \
-		../../$@ "RetroWEB Browser" $(WEB_CREATOR) *.grc *.bin
+		../../$@ "$(WEB_DB_NAME)" $(WEB_CREATOR) *.grc *.bin
 
 docker-build:
 	docker run --rm --platform linux/amd64 \

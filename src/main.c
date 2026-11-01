@@ -17,15 +17,15 @@ Err errno;
 
 #ifdef RETROWEB_BUILD
 #define APP_NAME             "RetroWEB Browser"
-#define APP_VERSION          "0.1.20"
+#define APP_VERSION          "0.1.21"
 #define HOME_URL             "http://retroweb.bjrno.com/?img=inline"
-#define USER_AGENT           "RetroWEBBrowser/0.1.20 (PalmOS 4)"
+#define USER_AGENT           "RetroWEBBrowser/0.1.21 (PalmOS 4)"
 #define PREF_CREATOR         'RtWB'
 #else
 #define APP_NAME             "RetroModem Browser"
-#define APP_VERSION          "0.1.20"
+#define APP_VERSION          "0.1.21"
 #define HOME_URL             "http://search.retromodem/"
-#define USER_AGENT           "RetroModemBrowser/0.1.20 (PalmOS 4)"
+#define USER_AGENT           "RetroModemBrowser/0.1.21 (PalmOS 4)"
 #define PREF_CREATOR         'RwBr'
 #endif
 #define HTTP_PORT            80
@@ -1664,6 +1664,43 @@ static Boolean AppHandleEvent(EventType *eventP)
     return true;
 }
 
+/* Versioned database names let Palm OS install an update even when an older
+ * code database is still open.  Once the new build launches, remove only old
+ * application databases with our own creator ID.  Preferences live in the
+ * Saved Preferences database and are not touched. */
+static void RemoveOlderApplicationDatabases(void)
+{
+    DmSearchStateType search;
+    UInt16 currentCard;
+    UInt16 card;
+    UInt16 cards[8];
+    UInt16 count;
+    UInt16 i;
+    LocalID currentID;
+    LocalID databaseID;
+    LocalID databases[8];
+    Boolean newSearch;
+
+    currentCard = 0;
+    currentID = 0;
+    SysCurAppDatabase(&currentCard, &currentID);
+    MemSet(&search, sizeof(search), 0);
+    count = 0;
+    newSearch = true;
+    while (count < 8 &&
+           DmGetNextDatabaseByTypeCreator(newSearch, &search, 'appl',
+                                          PREF_CREATOR, false, &card,
+                                          &databaseID) == errNone) {
+        newSearch = false;
+        if (databaseID != currentID || card != currentCard) {
+            cards[count] = card;
+            databases[count] = databaseID;
+            count++;
+        }
+    }
+    for (i = 0; i < count; ++i) DmDeleteDatabase(cards[i], databases[i]);
+}
+
 static Err AppStart(void)
 {
     UInt32 romVersion;
@@ -1672,6 +1709,7 @@ static Err AppStart(void)
         FrmAlert(AboutAlert);
         return sysErrRomIncompatible;
     }
+    RemoveOlderApplicationDatabases();
     gCurrentUrl[0] = '\0';
     gDocument = (Document *)MemPtrNew(sizeof(Document));
     if (!gDocument) return memErrNotEnoughSpace;

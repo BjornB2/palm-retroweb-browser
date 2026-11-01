@@ -57,10 +57,10 @@ INFORMATION
 BEGIN
 #ifdef RETROWEB_BUILD
     TITLE "RetroWEB Browser"
-    MESSAGE "RetroWEB Browser 0.1.20\nA basic Palm OS web browser powered by RetroWEB.\n\nretroweb.bjrno.com"
+    MESSAGE "RetroWEB Browser 0.1.21\nA basic Palm OS web browser powered by RetroWEB.\n\nretroweb.bjrno.com"
 #else
     TITLE "RetroModem Browser"
-    MESSAGE "RetroModem Browser 0.1.20\nA Palm OS companion for RetroModem.\n\nsearch.retromodem"
+    MESSAGE "RetroModem Browser 0.1.21\nA Palm OS companion for RetroModem.\n\nsearch.retromodem"
 #endif
     BUTTONS "OK"
 END
@@ -116,10 +116,10 @@ BEGIN
 END
 
 #ifdef RETROWEB_BUILD
-VERSION ID 1 "0.1.20"
-VERSION ID 1000 "0.1.20"
+VERSION ID 1 "0.1.21"
+VERSION ID 1000 "0.1.21"
 #else
-VERSION ID 1 "0.1.20"
-VERSION ID 1000 "0.1.20"
+VERSION ID 1 "0.1.21"
+VERSION ID 1000 "0.1.21"
 #endif
 
