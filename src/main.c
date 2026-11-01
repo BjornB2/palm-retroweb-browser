@@ -17,9 +17,9 @@ Err errno;
 
 #ifdef RETROWEB_BUILD
 #define APP_NAME             "RetroWEB Browser"
-#define APP_VERSION          "0.1.0"
+#define APP_VERSION          "0.1.17"
 #define HOME_URL             "http://retroweb.bjrno.com/?img=inline"
-#define USER_AGENT           "RetroWEBBrowser/0.1.0 (PalmOS 4)"
+#define USER_AGENT           "RetroWEBBrowser/0.1.17 (PalmOS 4)"
 #define PREF_CREATOR         'RtWB'
 #else
 #define APP_NAME             "RetroModem Browser"
