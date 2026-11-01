@@ -1,9 +1,9 @@
 # RetroWEB Browser for Palm OS
 
 RetroWEB Browser is a small, native, open-source web browser for classic Palm
-OS handhelds with basic inline image support—an uncommon capability among
-browsers that still run on the colour Palm IIIc. It renders the first frame of
-GIF87a/GIF89a images directly on Palm OS 4.0 or 4.1 and uses
+OS handhelds. It can display inline GIF images, which is something I could not
+find in other browsers that still run on the colour Palm IIIc. It renders the
+first frame of GIF87a/GIF89a images directly on Palm OS 4.0 or 4.1 and uses
 [RetroWEB](http://retroweb.bjrno.com/) to convert modern pages and images into
 content suitable for old devices.
 
@@ -57,8 +57,8 @@ make docker-build
 
 This creates two independent applications:
 
-- `dist/RetroWEBBrowser.prc` — public RetroWEB-powered browser (`RtWB`)
-- `dist/RBrowser.prc` — RetroModem companion build (`RwBr`)
+- `dist/RetroWEBBrowser.prc`: public RetroWEB-powered browser (`RtWB`)
+- `dist/RBrowser.prc`: RetroModem companion build (`RwBr`)
 
 Build only one profile with `make retroweb` or `make modem` inside the toolchain.
 The two applications use separate Palm creator IDs and preference databases,
