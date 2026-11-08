@@ -6,6 +6,12 @@ APPLICATIONICONNAME ID 1000 "RetroWEB"
 APPLICATIONICONNAME ID 1000 "RBrowser"
 #endif
 
+ICONFAMILY
+    "../../assets/icon-1-32.bmp"
+    "../../assets/icon-8.bmp"
+    "../../assets/icon-8.bmp"
+    "../../assets/icon-8.bmp" TRANSPARENCY 255 255 255
+
 FORM ID MainForm AT (0 0 160 160)
 MENUID MainMenu
 BEGIN
@@ -57,10 +63,10 @@ INFORMATION
 BEGIN
 #ifdef RETROWEB_BUILD
     TITLE "RetroWEB Browser"
-    MESSAGE "RetroWEB Browser 0.1.22\nA basic Palm OS web browser powered by RetroWEB.\n\nretroweb.bjrno.com"
+    MESSAGE "RetroWEB Browser 0.1.34\nA basic Palm OS web browser powered by RetroWEB.\n\nretroweb.bjrno.com"
 #else
     TITLE "RetroModem Browser"
-    MESSAGE "RetroModem Browser 0.1.22\nA Palm OS companion for RetroModem.\n\nretroweb.bjrno.com"
+    MESSAGE "RetroModem Browser 0.1.34\nA Palm OS companion for RetroModem.\n\nretroweb.bjrno.com"
 #endif
     BUTTONS "OK"
 END
@@ -99,11 +105,15 @@ END
 FORM ID PreferencesForm AT (0 0 160 160)
 BEGIN
     TITLE "Preferences"
-    CHECKBOX "Load inline images" ID ImagesCheckbox AT (5 18 105 12) GROUP 0 USABLE LEFTANCHOR
-    LABEL "Home page:" ID 1599 AT (5 39) FONT 0
-    FIELD ID HomeUrlField AT (5 52 150 42) FONT 0 MULTIPLELINES MAXCHARS 255 UNDERLINED
-    BUTTON "Save" ID PreferencesOKButton AT (25 108 45 14) LEFTANCHOR FRAME FONT 0
-    BUTTON "Cancel" ID PreferencesCancelButton AT (88 108 48 14) LEFTANCHOR FRAME FONT 0
+    CHECKBOX "Load inline images" ID ImagesCheckbox AT (5 16 105 12) GROUP 0 USABLE LEFTANCHOR
+    CHECKBOX "Use HTTP proxy" ID ProxyCheckbox AT (5 30 105 12) GROUP 0 USABLE LEFTANCHOR
+    LABEL "Proxy host / port:" ID 1598 AT (5 46) FONT 0
+    FIELD ID ProxyHostField AT (5 57 112 14) FONT 0 MAXCHARS 127 UNDERLINED
+    FIELD ID ProxyPortField AT (121 57 34 14) FONT 0 NUMERIC MAXCHARS 5 UNDERLINED
+    LABEL "Home page:" ID 1599 AT (5 76) FONT 0
+    FIELD ID HomeUrlField AT (5 87 150 32) FONT 0 MULTIPLELINES MAXCHARS 255 UNDERLINED
+    BUTTON "Save" ID PreferencesOKButton AT (25 126 45 14) LEFTANCHOR FRAME FONT 0
+    BUTTON "Cancel" ID PreferencesCancelButton AT (88 126 48 14) LEFTANCHOR FRAME FONT 0
     GRAFFITISTATEINDICATOR AT (145 150)
 END
 
@@ -118,10 +128,10 @@ BEGIN
 END
 
 #ifdef RETROWEB_BUILD
-VERSION ID 1 "0.1.22"
-VERSION ID 1000 "0.1.22"
+VERSION ID 1 "0.1.34"
+VERSION ID 1000 "0.1.34"
 #else
-VERSION ID 1 "0.1.22"
-VERSION ID 1000 "0.1.22"
+VERSION ID 1 "0.1.34"
+VERSION ID 1000 "0.1.34"
 #endif
 

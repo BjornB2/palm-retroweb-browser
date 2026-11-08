@@ -3,7 +3,6 @@
 #define DOC_LEFT 2
 #define DOC_RIGHT 144
 #define DOC_LINE_GAP 1
-#define DOC_MAX_IMAGES 4
 
 /* Shared parser scratch space. Palm OS 68K stacks are too small for these
  * buffers to be automatic variables in nested parser/image calls. */
@@ -216,7 +215,9 @@ static UInt16 DecodeUtf8(const Char *input, UInt16 remaining, Char *output)
             return 3;
         }
     }
-    *output = '?';
+    /* RetroWEB's Palm profile emits Windows-1252. Preserve a lone high byte
+     * when it is not a valid UTF-8 sequence (for example 0xF6 for ö). */
+    *output = (Char)a;
     return 1;
 }
 
@@ -414,12 +415,50 @@ static void ResolveUrl(const Char *base, const Char *reference,
     StrCat(output, source);
 }
 
+Boolean DocumentImageUrlAt(const Char *html, const Char *baseUrl, UInt16 index,
+                           Char *output, UInt16 capacity)
+{
+    const Char *p;
+    const Char *tagEnd;
+    const Char *name;
+    UInt16 tagLength;
+    UInt16 found;
+    if (!html || !baseUrl || !output || !capacity) return false;
+    output[0] = '\0';
+    p = html;
+    found = 0;
+    while ((p = StrChr(p, '<')) != NULL) {
+        tagEnd = StrChr(p, '>');
+        if (!tagEnd) break;
+        tagLength = (UInt16)(tagEnd - p - 1);
+        if (tagLength >= sizeof(gDocTag)) tagLength = sizeof(gDocTag) - 1;
+        MemMove(gDocTag, p + 1, tagLength);
+        gDocTag[tagLength] = '\0';
+        name = gDocTag;
+        while (*name == ' ' || *name == '\t') name++;
+        if (*name != '/' && StrNCaselessCompare(name, "img", 3) == 0 &&
+            !IsNameChar(name[3]) &&
+            GetAttribute(gDocTag, "src", gDocUrlA, sizeof(gDocUrlA))) {
+            if (found == index) {
+                ResolveUrl(baseUrl, gDocUrlA, gDocUrlB, sizeof(gDocUrlB));
+                if (!gDocUrlB[0] || StrLen(gDocUrlB) + 1 > capacity) return false;
+                StrCopy(output, gDocUrlB);
+                return true;
+            }
+            found++;
+        }
+        p = tagEnd + 1;
+    }
+    return false;
+}
+
 static void AddImage(LayoutState *state, const Char *tag)
 {
     BitmapType *bitmap;
     UInt16 width;
     UInt16 height;
     UInt16 rowBytes;
+    UInt16 imageIndex;
     DocumentItem *item;
     if (!GetAttribute(tag, "src", gDocUrlA, sizeof(gDocUrlA))) return;
     ResolveUrl(state->document->baseUrl, gDocUrlA, gDocUrlB, sizeof(gDocUrlB));
@@ -429,25 +468,30 @@ static void AddImage(LayoutState *state, const Char *tag)
         return;
     }
     bitmap = NULL;
-    if (state->loader && state->document->imageCount < DOC_MAX_IMAGES)
-        bitmap = state->loader(gDocUrlB, state->loaderContext);
+    width = 0;
+    height = 0;
+    imageIndex = 0xffff;
+    if (state->loader)
+        bitmap = state->loader(gDocUrlB, state->loaderContext,
+                               &width, &height, &imageIndex);
     if (state->eventPump && !state->eventPump(state->eventContext)) {
         if (bitmap) BmpDelete(bitmap);
         state->cancelled = true;
         return;
     }
-    if (!bitmap) {
+    if (!bitmap && (!width || !height || imageIndex == 0xffff)) {
         if (GetAttribute(tag, "alt", gDocAlt, sizeof(gDocAlt)))
             AddText(state, gDocAlt, StrLen(gDocAlt));
         else AddText(state, "[image]", 7);
         return;
     }
     state->document->imageCount++;
-    BmpGetDimensions(bitmap, &width, &height, &rowBytes);
+    if (bitmap) BmpGetDimensions(bitmap, &width, &height, &rowBytes);
     if (state->x > DOC_LEFT + state->listDepth * 6) NewLine(state, false);
     item = NewItem(state, docItemImage);
     if (!item) { BmpDelete(bitmap); return; }
     item->bitmap = bitmap;
+    item->imageIndex = imageIndex;
     item->x = DOC_LEFT;
     item->y = state->y;
     item->width = width;
@@ -667,26 +711,41 @@ void DocumentDraw(Document *document, const RectangleType *bounds)
     Coord screenY;
     RectangleType oldClip;
     FontID oldFont;
+    FontID currentFont;
     IndexedColorType oldText;
+    IndexedColorType linkText;
+    IndexedColorType normalText;
+    IndexedColorType currentText;
     RGBColorType blue;
     WinGetClip(&oldClip);
     WinSetClip(bounds);
     WinEraseRectangle(bounds, 0);
     oldFont = FntSetFont(stdFont);
     oldText = WinSetTextColor(UIColorGetTableEntryIndex(UIFieldText));
+    currentFont = stdFont;
     blue.index = 0;
     blue.r = 0;
     blue.g = 0;
     blue.b = 200;
+    linkText = WinRGBToIndex(&blue);
+    normalText = UIColorGetTableEntryIndex(UIFieldText);
+    currentText = normalText;
     for (i = 0; i < document->itemCount; ++i) {
         item = &document->items[i];
         screenY = bounds->topLeft.y + item->y - document->scrollY;
-        if (screenY + item->height < bounds->topLeft.y ||
-            screenY > bounds->topLeft.y + bounds->extent.y) continue;
+        if (screenY + item->height < bounds->topLeft.y) continue;
+        if (screenY > bounds->topLeft.y + bounds->extent.y) break;
         if (item->kind == docItemText) {
-            FntSetFont(item->font);
-            if (item->linkOffset) WinSetTextColor(WinRGBToIndex(&blue));
-            else WinSetTextColor(UIColorGetTableEntryIndex(UIFieldText));
+            IndexedColorType wantedText;
+            if (item->font != currentFont) {
+                FntSetFont(item->font);
+                currentFont = item->font;
+            }
+            wantedText = item->linkOffset ? linkText : normalText;
+            if (wantedText != currentText) {
+                WinSetTextColor(wantedText);
+                currentText = wantedText;
+            }
             WinDrawChars(document->pool + item->textOffset,
                          StrLen(document->pool + item->textOffset),
                          bounds->topLeft.x + item->x, screenY);

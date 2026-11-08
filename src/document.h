@@ -8,7 +8,9 @@
 #define DOC_MAX_CONTROLS 16
 #define DOC_MAX_FORMS 4
 
-typedef BitmapType *(*DocumentImageLoader)(const Char *url, void *context);
+typedef BitmapType *(*DocumentImageLoader)(const Char *url, void *context,
+                                           UInt16 *widthOut, UInt16 *heightOut,
+                                           UInt16 *imageIndexOut);
 typedef Boolean (*DocumentEventPump)(void *context);
 
 typedef enum {
@@ -25,6 +27,7 @@ typedef struct {
     UInt16 textOffset;
     UInt16 linkOffset;
     UInt16 controlIndex;
+    UInt16 imageIndex;
     Coord x;
     Coord y;
     Coord width;
@@ -81,6 +84,8 @@ Boolean DocumentBuildSubmitUrl(Document *document, UInt16 submitIndex,
 Boolean DocumentBuildPost(Document *document, UInt16 submitIndex,
                           Char *action, UInt16 actionCapacity,
                           Char *body, UInt16 bodyCapacity);
+Boolean DocumentImageUrlAt(const Char *html, const Char *baseUrl, UInt16 index,
+                           Char *output, UInt16 capacity);
 
 #endif
 

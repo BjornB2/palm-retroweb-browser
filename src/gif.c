@@ -4,6 +4,31 @@
 
 /* A 256-entry RGB palette is 1 KB; keep it off the Palm OS 68K stack. */
 static RGBColorType gGifPalette[256];
+static UInt8 gGifPalmPalette[256];
+static UInt8 *gGifWorkspace = NULL;
+static UInt16 *gGifPrefix = NULL;
+static UInt8 *gGifSuffix = NULL;
+static UInt8 *gGifStack = NULL;
+
+Boolean GifPrepareDecoder(void)
+{
+    if (gGifWorkspace) return true;
+    gGifWorkspace = (UInt8 *)MemPtrNew(GIF_MAX_CODES * 4);
+    if (!gGifWorkspace) return false;
+    gGifPrefix = (UInt16 *)gGifWorkspace;
+    gGifSuffix = gGifWorkspace + GIF_MAX_CODES * sizeof(UInt16);
+    gGifStack = gGifSuffix + GIF_MAX_CODES;
+    return true;
+}
+
+void GifReleaseDecoder(void)
+{
+    if (gGifWorkspace) MemPtrFree(gGifWorkspace);
+    gGifWorkspace = NULL;
+    gGifPrefix = NULL;
+    gGifSuffix = NULL;
+    gGifStack = NULL;
+}
 
 typedef struct {
     const UInt8 *data;
@@ -44,6 +69,47 @@ static Boolean SkipSubBlocks(GifReader *reader)
     return true;
 }
 
+Boolean GifGetFirstFrameDimensions(const UInt8 *data, UInt32 length,
+                                   UInt16 *widthOut, UInt16 *heightOut)
+{
+    GifReader reader;
+    UInt16 logicalWidth;
+    UInt16 logicalHeight;
+    UInt16 width;
+    UInt16 height;
+    UInt8 packed;
+    UInt8 ignored;
+    UInt8 marker;
+    UInt8 paletteBits;
+    if (!data || length < 13 ||
+        (MemCmp(data, "GIF87a", 6) != 0 && MemCmp(data, "GIF89a", 6) != 0))
+        return false;
+    reader.data = data;
+    reader.length = length;
+    reader.position = 6;
+    if (!ReadWord(&reader, &logicalWidth) || !ReadWord(&reader, &logicalHeight) ||
+        !ReadByte(&reader, &packed) || !ReadByte(&reader, &ignored) ||
+        !ReadByte(&reader, &ignored)) return false;
+    if (packed & 0x80) {
+        paletteBits = (UInt8)((packed & 7) + 1);
+        if (!SkipBytes(&reader, 3UL * (1UL << paletteBits))) return false;
+    }
+    for (;;) {
+        if (!ReadByte(&reader, &marker)) return false;
+        if (marker == 0x21) {
+            if (!ReadByte(&reader, &ignored) || !SkipSubBlocks(&reader)) return false;
+            continue;
+        }
+        if (marker != 0x2c) return false;
+        if (!SkipBytes(&reader, 4) || !ReadWord(&reader, &width) ||
+            !ReadWord(&reader, &height)) return false;
+        if (!width || !height || width > 320 || height > 320) return false;
+        if (widthOut) *widthOut = width;
+        if (heightOut) *heightOut = height;
+        return true;
+    }
+}
+
 static UInt16 ReadCode(const UInt8 *compressed, UInt32 compressedLength,
                        UInt32 *bitPosition, UInt8 codeSize)
 {
@@ -63,8 +129,41 @@ static UInt16 ReadCode(const UInt8 *compressed, UInt32 compressedLength,
     return (UInt16)(value & ((1UL << codeSize) - 1));
 }
 
+typedef struct {
+    UInt8 *bits;
+    UInt16 width;
+    UInt16 height;
+    UInt16 rowBytes;
+    UInt16 x;
+    UInt16 row;
+    UInt8 pass;
+    Boolean interlaced;
+} GifOutput;
+
+static Boolean WritePixel(GifOutput *output, UInt8 paletteIndex)
+{
+    static const UInt8 starts[4] = { 0, 4, 2, 1 };
+    static const UInt8 steps[4] = { 8, 8, 4, 2 };
+    if (output->row >= output->height) return false;
+    output->bits[(UInt32)output->row * output->rowBytes + output->x] =
+        gGifPalmPalette[paletteIndex];
+    output->x++;
+    if (output->x < output->width) return true;
+    output->x = 0;
+    if (!output->interlaced) {
+        output->row++;
+        return true;
+    }
+    output->row += steps[output->pass];
+    while (output->row >= output->height && output->pass < 3) {
+        output->pass++;
+        output->row = starts[output->pass];
+    }
+    return true;
+}
+
 static Boolean DecodeLzw(const UInt8 *compressed, UInt32 compressedLength,
-                         UInt8 minimumCodeSize, UInt8 *pixels,
+                         UInt8 minimumCodeSize, GifOutput *output,
                          UInt32 pixelCount, GifEventPump eventPump,
                          void *eventContext)
 {
@@ -86,15 +185,10 @@ static Boolean DecodeLzw(const UInt8 *compressed, UInt32 compressedLength,
     Boolean ok;
 
     if (minimumCodeSize > 8) return false;
-    prefix = (UInt16 *)MemPtrNew(GIF_MAX_CODES * sizeof(UInt16));
-    suffix = (UInt8 *)MemPtrNew(GIF_MAX_CODES);
-    stack = (UInt8 *)MemPtrNew(GIF_MAX_CODES);
-    if (!prefix || !suffix || !stack) {
-        if (prefix) MemPtrFree(prefix);
-        if (suffix) MemPtrFree(suffix);
-        if (stack) MemPtrFree(stack);
-        return false;
-    }
+    if (!GifPrepareDecoder()) return false;
+    prefix = gGifPrefix;
+    suffix = gGifSuffix;
+    stack = gGifStack;
     clearCode = (UInt16)(1 << minimumCodeSize);
     endCode = clearCode + 1;
     nextCode = endCode + 1;
@@ -125,7 +219,8 @@ static Boolean DecodeLzw(const UInt8 *compressed, UInt32 compressedLength,
         if (code == endCode) break;
         if (oldCode == 0xffff) {
             if (code >= clearCode) { ok = false; break; }
-            pixels[outputPosition++] = suffix[code];
+            if (!WritePixel(output, suffix[code])) { ok = false; break; }
+            outputPosition++;
             first = suffix[code];
             oldCode = code;
             continue;
@@ -146,8 +241,11 @@ static Boolean DecodeLzw(const UInt8 *compressed, UInt32 compressedLength,
         if (!ok || code >= clearCode) { ok = false; break; }
         first = suffix[code];
         stack[stackSize++] = first;
-        while (stackSize && outputPosition < pixelCount)
-            pixels[outputPosition++] = stack[--stackSize];
+        while (stackSize && outputPosition < pixelCount) {
+            if (!WritePixel(output, stack[--stackSize])) { ok = false; break; }
+            outputPosition++;
+        }
+        if (!ok) break;
 
         if (nextCode < GIF_MAX_CODES) {
             prefix[nextCode] = oldCode;
@@ -158,35 +256,10 @@ static Boolean DecodeLzw(const UInt8 *compressed, UInt32 compressedLength,
         oldCode = inCode;
     }
     if (outputPosition < pixelCount) ok = false;
-    MemPtrFree(prefix);
-    MemPtrFree(suffix);
-    MemPtrFree(stack);
     return ok;
 }
 
-static Boolean Deinterlace(UInt8 *pixels, UInt16 width, UInt16 height)
-{
-    static const UInt8 starts[4] = { 0, 4, 2, 1 };
-    static const UInt8 steps[4] = { 8, 8, 4, 2 };
-    UInt8 *copy;
-    UInt32 sourceOffset;
-    UInt16 pass;
-    UInt16 row;
-    copy = (UInt8 *)MemPtrNew((UInt32)width * height);
-    if (!copy) return false;
-    MemMove(copy, pixels, (UInt32)width * height);
-    sourceOffset = 0;
-    for (pass = 0; pass < 4; ++pass) {
-        for (row = starts[pass]; row < height; row += steps[pass]) {
-            MemMove(pixels + (UInt32)row * width, copy + sourceOffset, width);
-            sourceOffset += width;
-        }
-    }
-    MemPtrFree(copy);
-    return true;
-}
-
-BitmapType *GifDecodeFirstFrame(const UInt8 *data, UInt32 length,
+BitmapType *GifDecodeFirstFrame(UInt8 *data, UInt32 length,
                                 UInt16 *widthOut, UInt16 *heightOut,
                                 Err *errorOut, GifEventPump eventPump,
                                 void *eventContext)
@@ -208,20 +281,16 @@ BitmapType *GifDecodeFirstFrame(const UInt8 *data, UInt32 length,
     UInt8 blockSize;
     UInt8 *compressed;
     UInt32 compressedLength;
-    UInt32 compressedCapacity;
-    UInt8 *grown;
-    UInt8 *pixels;
     BitmapType *bitmap;
     UInt8 *bits;
     UInt16 bitmapWidth;
     UInt16 bitmapHeight;
     UInt16 rowBytes;
-    UInt16 x;
-    UInt16 y;
     UInt16 i;
     UInt16 localPaletteSize;
     Boolean interlaced;
     Err err;
+    GifOutput output;
 
     if (errorOut) *errorOut = dmErrInvalidParam;
     if (!data || length < 13 ||
@@ -268,65 +337,41 @@ BitmapType *GifDecodeFirstFrame(const UInt8 *data, UInt32 length,
     }
     if (!paletteSize || !ReadByte(&reader, &minimumCodeSize)) return NULL;
 
-    compressedCapacity = 1024;
     compressedLength = 0;
-    compressed = (UInt8 *)MemPtrNew(compressedCapacity);
-    if (!compressed) return NULL;
+    /* Compact GIF data sub-blocks into the already-owned response buffer.
+     * The destination always trails the unread source, so overlap is safe and
+     * no second image-sized allocation is needed. */
+    compressed = data;
     for (;;) {
-        if (!ReadByte(&reader, &blockSize)) { MemPtrFree(compressed); return NULL; }
+        if (!ReadByte(&reader, &blockSize)) return NULL;
         if (blockSize == 0) break;
-        if (reader.position + blockSize > reader.length) { MemPtrFree(compressed); return NULL; }
-        if (compressedLength + blockSize > compressedCapacity) {
-            UInt32 newCapacity;
-            newCapacity = compressedCapacity * 2;
-            while (newCapacity < compressedLength + blockSize) newCapacity *= 2;
-            grown = (UInt8 *)MemPtrNew(newCapacity);
-            if (!grown) { MemPtrFree(compressed); return NULL; }
-            MemMove(grown, compressed, compressedLength);
-            MemPtrFree(compressed);
-            compressed = grown;
-            compressedCapacity = newCapacity;
-        }
+        if (reader.position + blockSize > reader.length) return NULL;
         MemMove(compressed + compressedLength, reader.data + reader.position, blockSize);
         compressedLength += blockSize;
         reader.position += blockSize;
     }
 
-    pixels = (UInt8 *)MemPtrNew((UInt32)width * height);
-    if (!pixels) { MemPtrFree(compressed); return NULL; }
-    if (!DecodeLzw(compressed, compressedLength, minimumCodeSize, pixels,
-                   (UInt32)width * height, eventPump, eventContext)) {
-        MemPtrFree(compressed);
-        MemPtrFree(pixels);
-        return NULL;
-    }
-    MemPtrFree(compressed);
-    if (interlaced && !Deinterlace(pixels, width, height)) {
-        MemPtrFree(pixels);
-        return NULL;
-    }
-
     bitmap = BmpCreate(width, height, 8, NULL, &err);
     if (!bitmap || err) {
-        MemPtrFree(pixels);
-        if (errorOut) *errorOut = err;
+        if (errorOut) *errorOut = err ? err : memErrNotEnoughSpace;
         return NULL;
     }
     BmpGetDimensions(bitmap, &bitmapWidth, &bitmapHeight, &rowBytes);
     bits = (UInt8 *)BmpGetBits(bitmap);
-    for (y = 0; y < height; ++y) {
-        if (eventPump && !eventPump(eventContext)) {
-            BmpDelete(bitmap);
-            MemPtrFree(pixels);
-            return NULL;
-        }
-        for (x = 0; x < width; ++x) {
-            UInt8 paletteIndex;
-            paletteIndex = pixels[(UInt32)y * width + x];
-            bits[(UInt32)y * rowBytes + x] = WinRGBToIndex(&gGifPalette[paletteIndex]);
-        }
+    for (i = 0; i < paletteSize; ++i)
+        gGifPalmPalette[i] = WinRGBToIndex(&gGifPalette[i]);
+    MemSet(&output, sizeof(output), 0);
+    output.bits = bits;
+    output.width = width;
+    output.height = height;
+    output.rowBytes = rowBytes;
+    output.interlaced = interlaced;
+    if (!DecodeLzw(compressed, compressedLength, minimumCodeSize, &output,
+                   (UInt32)width * height, eventPump, eventContext)) {
+        BmpDelete(bitmap);
+        if (errorOut) *errorOut = gifErrLzwDecode;
+        return NULL;
     }
-    MemPtrFree(pixels);
     if (widthOut) *widthOut = width;
     if (heightOut) *heightOut = height;
     if (errorOut) *errorOut = errNone;

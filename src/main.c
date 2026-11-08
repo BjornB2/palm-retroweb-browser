@@ -9,6 +9,7 @@
 #include <Field.h>
 #include <StdIOPalm.h>
 #include <Unix/sys_socket.h>
+#include <Unix/sys_errno.h>
 #include "resources.h"
 #include "gif.h"
 #include "document.h"
@@ -17,16 +18,23 @@ Err errno;
 
 #ifdef RETROWEB_BUILD
 #define APP_NAME             "RetroWEB Browser"
-#define APP_VERSION          "0.1.22"
-#define USER_AGENT           "RetroWEBBrowser/0.1.22 (PalmOS 4)"
+#define APP_VERSION          "0.1.34"
+#define USER_AGENT           "RetroWEBBrowser/0.1.34 (PalmOS 4)"
 #define PREF_CREATOR         'RtWB'
+#define DEFAULT_HOME_URL     "http://retroweb.bjrno.com/"
+#define DEFAULT_PROXY_HOST   "retroweb.bjrno.com"
+#define DEFAULT_PROXY_PORT   8081
 #else
 #define APP_NAME             "RetroModem Browser"
-#define APP_VERSION          "0.1.22"
-#define USER_AGENT           "RetroModemBrowser/0.1.22 (PalmOS 4)"
+#define APP_VERSION          "0.1.34"
+#define USER_AGENT           "RetroModemBrowser/0.1.34 (PalmOS 4)"
 #define PREF_CREATOR         'RwBr'
+#define DEFAULT_HOME_URL     "http://retroweb.bjrno.com/"
+#define DEFAULT_PROXY_HOST   ""
+#define DEFAULT_PROXY_PORT   0
 #endif
-#define DEFAULT_HOME_URL     "http://retroweb.bjrno.com/?img=inline"
+#define DEFAULT_BOOKMARK_TITLE "Bj\366rns Blog"
+#define DEFAULT_BOOKMARK_URL "http://bjornsblog.nl/"
 #define HTTP_PORT            80
 #define ADDRESS_MAX          255
 #define HISTORY_MAX          8
@@ -34,8 +42,10 @@ Err errno;
 #define PAGE_MAX             60000
 #define BOOKMARK_MAX         12
 #define BOOKMARK_TITLE_MAX   39
+#define IMAGE_CACHE_MAX      16
+#define IMAGE_BITMAP_CACHE   2
 #define PREF_ID              1
-#define PREF_VERSION         2
+#define PREF_VERSION         3
 #define DeferredHomeEvent    (firstUserEvent + 1)
 
 typedef struct {
@@ -51,6 +61,9 @@ typedef struct {
     Char history[HISTORY_MAX][ADDRESS_MAX + 1];
     UInt8 imagesEnabled;
     Char homeUrl[ADDRESS_MAX + 1];
+    UInt8 proxyEnabled;
+    Char proxyHost[128];
+    UInt16 proxyPort;
 } SavedPreferencesType;
 
 static Char gCurrentUrl[ADDRESS_MAX + 1];
@@ -65,6 +78,9 @@ static Boolean gPlacesShowsHistory = false;
 static Char *gPlaceLabels[BOOKMARK_MAX];
 static Int16 gEditingControl = -1;
 static Boolean gImagesEnabled = true;
+static Boolean gProxyEnabled = false;
+static Char gProxyHost[128];
+static UInt16 gProxyPort = DEFAULT_PROXY_PORT;
 static Char gLastFetchUrl[512];
 static UInt32 gLastResponseBytes = 0;
 static UInt32 gLastExpectedBytes = 0;
@@ -80,11 +96,24 @@ static UInt16 gImageAttemptCount = 0;
 static UInt16 gImageLoadedCount = 0;
 static UInt16 gImageFailureCount = 0;
 static Char gLastImageError[64];
+typedef struct {
+    UInt16 recordIndex;
+    UInt16 width;
+    UInt16 height;
+    Boolean valid;
+} CachedImageInfo;
+static CachedImageInfo gCachedImages[IMAGE_CACHE_MAX];
+static UInt16 gCachedImageCount = 0;
+static DmOpenRef gImageCacheDb = NULL;
+static LocalID gImageCacheDbID = 0;
+static Boolean gLazyDecodeBusy = false;
+static Boolean gImageCacheReady = false;
 static Boolean gPendingNavigation = false;
 static Char gPendingNavigationUrl[ADDRESS_MAX + 1];
 static UInt16 gPendingMenuItem = 0;
 static Boolean gDisconnectRequested = false;
 static Char gStatusScratch[40];
+static Char gCurrentStatus[40];
 /* Large temporary buffers must not live on the tiny Palm OS 68K stack. */
 static Char gWorkUrl[1024];
 static Char gPostBody[1024];
@@ -94,6 +123,9 @@ static Char gHttpPath[1024];
 static Char gHttpRequest[1400];
 static Char gHttpChunk[RECEIVE_CHUNK];
 static Char gHttpRedirect[1024];
+static Char gConnectionHost[128];
+static Char gCachedHost[128];
+static UInt32 gCachedHostAddress = 0;
 
 static void SetStatus(const Char *text);
 static void SetAddress(const Char *url);
@@ -107,6 +139,7 @@ static Boolean PreferencesFormHandleEvent(EventType *eventP);
 static Boolean AddressFormHandleEvent(EventType *eventP);
 static Boolean SplitHttpUrl(const Char *url, Char *host, UInt16 hostCapacity,
                             Char *path, UInt16 pathCapacity);
+static void EnsureVisibleImages(const RectangleType *bounds);
 
 static Boolean StartsWith(const Char *text, const Char *prefix)
 {
@@ -154,6 +187,7 @@ static void DrawDocument(void)
     ScrollBarType *scrollP;
     Int32 maximum;
     if (gDocument && GetPageBounds(&bounds)) {
+        EnsureVisibleImages(&bounds);
         DocumentDraw(gDocument, &bounds);
         formP = FrmGetActiveForm();
         index = FrmGetObjectIndex(formP, PageScrollBar);
@@ -165,6 +199,17 @@ static void DrawDocument(void)
                             bounds.extent.y > 1 ? bounds.extent.y - 1 : 1);
         }
     }
+}
+
+static void ScrollPageStep(Boolean down)
+{
+    RectangleType bounds;
+    Int16 delta;
+    if (!gDocument || !GetPageBounds(&bounds)) return;
+    delta = bounds.extent.y / 3;
+    if (delta < 1) delta = 1;
+    DocumentScroll(gDocument, down ? delta : -delta, bounds.extent.y);
+    DrawDocument();
 }
 
 /* Palm OS turns taps on a standard scrollbar track into page jumps before the
@@ -255,11 +300,9 @@ static void PumpLoadingEvents(void)
         }
         if (event.eType == keyDownEvent && GetPageBounds(&bounds)) {
             if (event.data.keyDown.chr == pageUpChr) {
-                DocumentScroll(gDocument, -bounds.extent.y + 12, bounds.extent.y);
-                DrawDocument();
+                ScrollPageStep(false);
             } else if (event.data.keyDown.chr == pageDownChr) {
-                DocumentScroll(gDocument, bounds.extent.y - 12, bounds.extent.y);
-                DrawDocument();
+                ScrollPageStep(true);
             } else {
                 if (SysHandleEvent(&event)) continue;
                 if (MenuHandleEvent(NULL, &event, &menuError)) continue;
@@ -294,6 +337,52 @@ static Boolean LoadingEventPump(void *context)
     return !gAbortRequested;
 }
 
+static Boolean ConnectResponsive(int socketDesc, struct sockaddr_in *server)
+{
+    UInt16 nonBlocking;
+    UInt16 optionLength;
+    Int16 socketError;
+    Int16 ready;
+    fd_set writeSet;
+    struct timeval timeout;
+    UInt32 started;
+
+    nonBlocking = 1;
+    if (setsockopt(socketDesc, SOL_SOCKET, netSocketOptSockNonBlocking,
+                   &nonBlocking, sizeof(nonBlocking)) < 0) return false;
+    if (connect(socketDesc, (struct sockaddr *)server, sizeof(*server)) == 0)
+        ready = 1;
+    else {
+        if (errno != EINPROGRESS && errno != EWOULDBLOCK && errno != EALREADY)
+            return false;
+        ready = 0;
+    }
+    started = TimGetTicks();
+    while (!ready && TimGetTicks() - started < (UInt32)SysTicksPerSecond() * 30) {
+        PumpLoadingEvents();
+        if (gAbortRequested) return false;
+        FD_ZERO(&writeSet);
+        FD_SET(socketDesc, &writeSet);
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 0;
+        ready = select(socketDesc + 1, NULL, &writeSet, NULL, &timeout);
+        if (ready < 0 && errno != EWOULDBLOCK) return false;
+        if (ready <= 0) {
+            ready = 0;
+            SysTaskDelay(1);
+        }
+    }
+    if (!ready) return false;
+    socketError = 0;
+    optionLength = sizeof(socketError);
+    if (getsockopt(socketDesc, SOL_SOCKET, netSocketOptSockErrorStatus,
+                   &socketError, &optionLength) < 0 || socketError) return false;
+    nonBlocking = 0;
+    if (setsockopt(socketDesc, SOL_SOCKET, netSocketOptSockNonBlocking,
+                   &nonBlocking, sizeof(nonBlocking)) < 0) return false;
+    return true;
+}
+
 static void ReplaceFieldText(FieldType *fieldP, const Char *text)
 {
     MemHandle oldH;
@@ -322,6 +411,9 @@ static void SetStatus(const Char *text)
     FormType *formP;
     UInt16 index;
     RectangleType bounds;
+    if (text != gCurrentStatus)
+        SafeCopy(gCurrentStatus, text, sizeof(gCurrentStatus));
+    text = gCurrentStatus;
     formP = FrmGetActiveForm();
     if (!formP) return;
     index = FrmGetObjectIndex(formP, StatusLabel);
@@ -366,8 +458,9 @@ static Boolean SplitHttpUrl(const Char *url, Char *host, UInt16 hostCapacity,
     const Char *start;
     const Char *slash;
     UInt16 hostLength;
-    if (!StartsWith(url, "http://")) return false;
-    start = url + 7;
+    if (StartsWith(url, "http://")) start = url + 7;
+    else if (StartsWith(url, "https://")) start = url + 8;
+    else return false;
     slash = StrChr(start, '/');
     if (!slash) {
         SafeCopy(host, start, hostCapacity);
@@ -384,43 +477,9 @@ static Boolean SplitHttpUrl(const Char *url, Char *host, UInt16 hostCapacity,
 
 static Boolean MakeFetchUrl(const Char *original, Char *result, UInt16 capacity)
 {
-#ifdef RETROWEB_BUILD
-    static const Char hex[] = "0123456789ABCDEF";
-    const Char *prefix;
-    UInt16 used;
-    UInt8 c;
-    if (StartsWith(original, "http://retroweb.bjrno.com/") ||
-        StrCompare(original, "http://retroweb.bjrno.com") == 0) {
-        if (StrLen(original) + 1 > capacity) return false;
-        SafeCopy(result, original, capacity);
-        return true;
-    }
-    prefix = "http://retroweb.bjrno.com/proxy.php?url=";
-    if (StrLen(prefix) + 12 >= capacity) return false;
-    SafeCopy(result, prefix, capacity);
-    used = StrLen(result);
-    while (*original) {
-        c = (UInt8)*original++;
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '-' || c == '_' ||
-            c == '.' || c == '~') {
-            if (used + 1 >= capacity) return false;
-            result[used++] = (Char)c;
-        } else {
-            if (used + 3 >= capacity) return false;
-            result[used++] = '%';
-            result[used++] = hex[c >> 4];
-            result[used++] = hex[c & 15];
-        }
-    }
-    if (used + 12 >= capacity) return false;
-    StrCopy(result + used, "&img=inline");
-    return true;
-#else
     if (StrLen(original) + 1 > capacity) return false;
     SafeCopy(result, original, capacity);
     return true;
-#endif
 }
 
 static Err OpenNetwork(void)
@@ -510,9 +569,13 @@ static Boolean HttpRequestInternal(const Char *url, const Char *method, const Ch
     Boolean isRedirect;
     Char *line;
     Char *lineEnd;
+    const Char *scheme;
+    UInt16 schemeLength;
     UInt16 redirectLength;
     UInt8 receiveErrors;
     UInt32 progressDrawn;
+    UInt32 progressRendered;
+    UInt32 lastRenderTick;
     UInt32 lastDataTick;
     Int32 normalTimeout;
     UInt16 nonBlocking;
@@ -525,8 +588,20 @@ static Boolean HttpRequestInternal(const Char *url, const Char *method, const Ch
     gHttpResponseLimited = false;
     headerEnd = -1;
     progressDrawn = 0;
+    progressRendered = 0;
+    lastRenderTick = 0;
     if (!SplitHttpUrl(url, host, sizeof(host), gHttpPath, sizeof(gHttpPath))) {
-        SafeCopy(errorText, "Only HTTP URLs are supported.", errorCapacity);
+        SafeCopy(errorText, "Invalid web address.", errorCapacity);
+        return false;
+    }
+    if (StartsWith(url, "https://") && !gProxyEnabled) {
+        SafeCopy(errorText, "HTTPS requires an HTTP forwarding proxy.", errorCapacity);
+        return false;
+    }
+    if (gProxyEnabled) SafeCopy(gConnectionHost, gProxyHost, sizeof(gConnectionHost));
+    else SafeCopy(gConnectionHost, host, sizeof(gConnectionHost));
+    if (!gConnectionHost[0]) {
+        SafeCopy(errorText, "HTTP proxy host is empty.", errorCapacity);
         return false;
     }
     SetStatus("Opening network connection...");
@@ -542,47 +617,55 @@ static Boolean HttpRequestInternal(const Char *url, const Char *method, const Ch
         SafeCopy(errorText, "Could not create network socket.", errorCapacity);
         return false;
     }
-    SetStatus("Resolving server name...");
-    normalTimeout = AppNetTimeout;
-    AppNetTimeout = (Int32)SysTicksPerSecond();
-    lastDataTick = TimGetTicks();
-    hp = NULL;
-    do {
-        hp = gethostbyname(host);
-        if (hp) break;
-        PumpLoadingEvents();
-        if (gAbortRequested) {
-            AppNetTimeout = normalTimeout;
+    MemSet(&server, sizeof(server), 0);
+    if (gCachedHost[0] && StrCaselessCompare(gCachedHost, gConnectionHost) == 0) {
+        MemMove(&server.sin_addr, &gCachedHostAddress, sizeof(gCachedHostAddress));
+    } else {
+        SetStatus("Resolving server name...");
+        normalTimeout = AppNetTimeout;
+        AppNetTimeout = (Int32)SysTicksPerSecond();
+        lastDataTick = TimGetTicks();
+        hp = NULL;
+        do {
+            hp = gethostbyname(gConnectionHost);
+            if (hp) break;
+            PumpLoadingEvents();
+            if (gAbortRequested) {
+                AppNetTimeout = normalTimeout;
+                close(socketDesc);
+                SafeCopy(errorText, "Request cancelled.", errorCapacity);
+                return false;
+            }
+        } while (TimGetTicks() - lastDataTick <
+                 (UInt32)SysTicksPerSecond() * 30);
+        AppNetTimeout = normalTimeout;
+        if (!hp) {
             close(socketDesc);
-            SafeCopy(errorText, "Request cancelled.", errorCapacity);
+            SafeCopy(errorText, "Host name could not be resolved.", errorCapacity);
             return false;
         }
-    } while (TimGetTicks() - lastDataTick < (UInt32)SysTicksPerSecond() * 30);
-    AppNetTimeout = normalTimeout;
-    if (!hp) {
-        close(socketDesc);
-        SafeCopy(errorText, "Host name could not be resolved.", errorCapacity);
-        return false;
+        bcopy(hp->h_addr, (Char *)&server.sin_addr, hp->h_length);
+        SafeCopy(gCachedHost, gConnectionHost, sizeof(gCachedHost));
+        MemMove(&gCachedHostAddress, &server.sin_addr, sizeof(gCachedHostAddress));
     }
-    MemSet(&server, sizeof(server), 0);
-    bcopy(hp->h_addr, (Char *)&server.sin_addr, hp->h_length);
     server.sin_family = AF_INET;
-    server.sin_port = htons(HTTP_PORT);
+    server.sin_port = htons(gProxyEnabled ? gProxyPort : HTTP_PORT);
     SetStatus("Connecting to web server...");
-    if (connect(socketDesc, (struct sockaddr *)&server, sizeof(server)) < 0) {
+    if (!ConnectResponsive(socketDesc, &server)) {
         close(socketDesc);
-        SafeCopy(errorText, "Could not connect to web server.", errorCapacity);
+        SafeCopy(errorText, gAbortRequested ? "Request cancelled." :
+                 "Could not connect to web server.", errorCapacity);
         return false;
     }
     if (postBody) {
         StrIToA(lengthText, StrLen(postBody));
         StrPrintF(gHttpRequest,
                   "%s %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: " USER_AGENT "\r\nAccept: text/html,image/gif\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %s\r\nConnection: close\r\n\r\n",
-                  method, gHttpPath, host, lengthText);
+                  method, gProxyEnabled ? url : gHttpPath, host, lengthText);
     } else {
         StrPrintF(gHttpRequest,
                   "%s %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: " USER_AGENT "\r\nAccept: text/html,image/gif\r\nConnection: close\r\n\r\n",
-                  method, gHttpPath, host);
+                  method, gProxyEnabled ? url : gHttpPath, host);
     }
     SetStatus("Sending page request...");
     if (send(socketDesc, gHttpRequest, StrLen(gHttpRequest), 0) < 0) {
@@ -667,8 +750,8 @@ static Boolean HttpRequestInternal(const Char *url, const Char *method, const Ch
         if (headerEnd < 0) headerEnd = FindHeaderEnd(response, used);
         if (headerEnd >= 0 && !gHttpExpectedBytes)
             gHttpExpectedBytes = FindContentLength(response, (UInt16)headerEnd);
-        if (gProgressiveReceive) {
-            if (headerEnd >= 0 && used - headerEnd >= progressDrawn + 1024) {
+        if (gProgressiveReceive && headerEnd >= 0) {
+            if (used - headerEnd >= progressDrawn + 1024) {
                 progressDrawn = used - headerEnd;
                 if (gHttpExpectedBytes)
                     StrPrintF(gStatusScratch, "Receiving page: %lu / %lu KB",
@@ -678,6 +761,12 @@ static Boolean HttpRequestInternal(const Char *url, const Char *method, const Ch
                     StrPrintF(gStatusScratch, "Receiving page: %lu KB",
                               (progressDrawn + 1023) / 1024);
                 SetStatus(gStatusScratch);
+            }
+            if (used - headerEnd >= progressRendered + 2048 &&
+                (!lastRenderTick || TimGetTicks() - lastRenderTick >=
+                 (UInt32)SysTicksPerSecond() / 2)) {
+                progressRendered = used - headerEnd;
+                lastRenderTick = TimGetTicks();
                 savedScroll = gDocument->scrollY;
                 DocumentParse(gDocument, response + headerEnd, url, NULL, NULL,
                               LoadingEventPump, NULL);
@@ -725,11 +814,13 @@ static Boolean HttpRequestInternal(const Char *url, const Char *method, const Ch
             if (gHttpRedirect[0] == '/') {
                 UInt16 relativeLength;
                 relativeLength = StrLen(gHttpRedirect);
-                if (StrLen(host) + relativeLength + 8 < sizeof(gHttpRedirect)) {
-                    MemMove(gHttpRedirect + 7 + StrLen(host), gHttpRedirect,
+                scheme = StartsWith(url, "https://") ? "https://" : "http://";
+                schemeLength = StrLen(scheme);
+                if (StrLen(host) + relativeLength + schemeLength + 1 < sizeof(gHttpRedirect)) {
+                    MemMove(gHttpRedirect + schemeLength + StrLen(host), gHttpRedirect,
                             relativeLength + 1);
-                    MemMove(gHttpRedirect + 7, host, StrLen(host));
-                    MemMove(gHttpRedirect, "http://", 7);
+                    MemMove(gHttpRedirect + schemeLength, host, StrLen(host));
+                    MemMove(gHttpRedirect, scheme, schemeLength);
                 }
             }
             MemPtrFree(response);
@@ -747,15 +838,11 @@ static Boolean HttpRequestInternal(const Char *url, const Char *method, const Ch
         SafeCopy(errorText, "The response ended before the complete page arrived.", errorCapacity);
         return false;
     }
-    *bodyOut = (Char *)MemPtrNew(*bodyLengthOut + 1);
-    if (!*bodyOut) {
-        MemPtrFree(response);
-        SafeCopy(errorText, "Not enough memory for page.", errorCapacity);
-        return false;
-    }
-    MemMove(*bodyOut, response + headerEnd, *bodyLengthOut);
-    (*bodyOut)[*bodyLengthOut] = '\0';
-    MemPtrFree(response);
+    /* Reuse the receive allocation as the returned body. This avoids a second
+     * full-page allocation and copy at the Palm's tightest memory point. */
+    MemMove(response, response + headerEnd, *bodyLengthOut);
+    response[*bodyLengthOut] = '\0';
+    *bodyOut = response;
     return true;
 }
 
@@ -792,69 +879,258 @@ static Boolean HttpGet(const Char *url, Char **bodyOut, UInt32 *bodyLengthOut,
                        errorText, errorCapacity);
 }
 
-static BitmapType *LoadGifForDocument(const Char *url, void *context)
+static void CloseImageCache(Boolean deleteDatabase)
+{
+    if (gImageCacheDb) {
+        DmCloseDatabase(gImageCacheDb);
+        gImageCacheDb = NULL;
+    }
+    if (deleteDatabase && gImageCacheDbID) {
+        DmDeleteDatabase(0, gImageCacheDbID);
+        gImageCacheDbID = 0;
+    }
+    gCachedImageCount = 0;
+    gImageCacheReady = false;
+    MemSet(gCachedImages, sizeof(gCachedImages), 0);
+}
+
+static Boolean ResetImageCache(void)
+{
+    const Char *name;
+    CloseImageCache(true);
+#ifdef RETROWEB_BUILD
+    name = "RetroWEB GIF Cache";
+#else
+    name = "RBrowser GIF Cache";
+#endif
+    gImageCacheDbID = DmFindDatabase(0, name);
+    if (gImageCacheDbID) DmDeleteDatabase(0, gImageCacheDbID);
+    if (DmCreateDatabase(0, name, PREF_CREATOR, 'GiFC', false) != errNone)
+        return false;
+    gImageCacheDbID = DmFindDatabase(0, name);
+    if (!gImageCacheDbID) return false;
+    gImageCacheDb = DmOpenDatabase(0, gImageCacheDbID, dmModeReadWrite);
+    return gImageCacheDb != NULL;
+}
+
+static Boolean CacheGif(const Char *url)
 {
     Char *body;
     UInt32 bodyLength;
     Char errorText[64];
     UInt16 width;
     UInt16 height;
-    Err error;
-    BitmapType *bitmap;
+    UInt16 recordIndex;
+    MemHandle recordH;
+    MemPtr recordP;
     Int32 normalTimeout;
-    if (!gImagesEnabled || gLastRequestAborted) return NULL;
+    CachedImageInfo *info;
+    if (gCachedImageCount >= IMAGE_CACHE_MAX || !gImageCacheDb) return false;
+    info = &gCachedImages[gCachedImageCount++];
+    MemSet(info, sizeof(CachedImageInfo), 0);
     gImageAttemptCount++;
-    body = NULL;
-    StrPrintF(gStatusScratch, "Loading image %u...", gImageAttemptCount);
+    StrPrintF(gStatusScratch, "Caching image %u...", gImageAttemptCount);
     SetStatus(gStatusScratch);
+    body = NULL;
     normalTimeout = AppNetTimeout;
     AppNetTimeout = (Int32)SysTicksPerSecond() * 8;
     if (!HttpGet(url, &body, &bodyLength, errorText, sizeof(errorText))) {
         AppNetTimeout = normalTimeout;
         gImageFailureCount++;
         SafeCopy(gLastImageError, errorText, sizeof(gLastImageError));
-        return NULL;
+        return false;
     }
     AppNetTimeout = normalTimeout;
-    if (bodyLength < 6 ||
-        (MemCmp(body, "GIF87a", 6) != 0 && MemCmp(body, "GIF89a", 6) != 0)) {
-        gImageFailureCount++;
-        SafeCopy(gLastImageError, "Image is not GIF data.", sizeof(gLastImageError));
+    if (!GifGetFirstFrameDimensions((UInt8 *)body, bodyLength, &width, &height)) {
         MemPtrFree(body);
+        gImageFailureCount++;
+        SafeCopy(gLastImageError, "Image is not a supported GIF.",
+                 sizeof(gLastImageError));
+        return false;
+    }
+    recordIndex = dmMaxRecordIndex;
+    recordH = DmNewRecord(gImageCacheDb, &recordIndex, bodyLength);
+    if (!recordH) {
+        MemPtrFree(body);
+        gImageFailureCount++;
+        SafeCopy(gLastImageError, "Not enough storage for GIF cache.",
+                 sizeof(gLastImageError));
+        return false;
+    }
+    recordP = MemHandleLock(recordH);
+    DmWrite(recordP, 0, body, bodyLength);
+    MemHandleUnlock(recordH);
+    DmReleaseRecord(gImageCacheDb, recordIndex, true);
+    MemPtrFree(body);
+    info->recordIndex = recordIndex;
+    info->width = width;
+    info->height = height;
+    info->valid = true;
+    gImageLoadedCount++;
+    return true;
+}
+
+static BitmapType *DecodeCachedImage(UInt16 imageIndex)
+{
+    CachedImageInfo *info;
+    MemHandle recordH;
+    MemPtr recordP;
+    UInt32 length;
+    UInt8 *copy;
+    BitmapType *bitmap;
+    UInt16 width;
+    UInt16 height;
+    Err error;
+    if (imageIndex >= gCachedImageCount || !gImageCacheDb) return NULL;
+    info = &gCachedImages[imageIndex];
+    if (!info->valid) return NULL;
+    recordH = DmQueryRecord(gImageCacheDb, info->recordIndex);
+    if (!recordH) return NULL;
+    length = MemHandleSize(recordH);
+    copy = (UInt8 *)MemPtrNew(length);
+    if (!copy) {
+        SafeCopy(gLastImageError, "Not enough memory to read cached GIF.",
+                 sizeof(gLastImageError));
         return NULL;
     }
-    bitmap = GifDecodeFirstFrame((UInt8 *)body, bodyLength, &width, &height, &error,
+    recordP = MemHandleLock(recordH);
+    MemMove(copy, recordP, length);
+    MemHandleUnlock(recordH);
+    bitmap = GifDecodeFirstFrame(copy, length, &width, &height, &error,
                                  LoadingEventPump, NULL);
-    MemPtrFree(body);
+    MemPtrFree(copy);
     if (!bitmap) {
-        gImageFailureCount++;
-        SafeCopy(gLastImageError, "GIF could not be decoded.", sizeof(gLastImageError));
-    } else gImageLoadedCount++;
+        if (error == memErrNotEnoughSpace)
+            SafeCopy(gLastImageError, "Not enough memory for visible GIF.",
+                     sizeof(gLastImageError));
+        else if (error == gifErrLzwDecode)
+            SafeCopy(gLastImageError, "Cached GIF LZW decode failed.",
+                     sizeof(gLastImageError));
+        else
+            SafeCopy(gLastImageError, "Cached GIF could not be decoded.",
+                     sizeof(gLastImageError));
+    }
     return bitmap;
+}
+
+static Boolean WantedImageItem(UInt16 itemIndex, Int16 first, Int16 second)
+{
+    return itemIndex == (UInt16)first || itemIndex == (UInt16)second;
+}
+
+static void EnsureVisibleImages(const RectangleType *bounds)
+{
+    Int16 first;
+    Int16 second;
+    Int16 lastAbove;
+    UInt16 i;
+    Coord top;
+    Coord bottom;
+    DocumentItem *item;
+    Char savedStatus[40];
+    if (gLazyDecodeBusy || !gImageCacheReady || !gDocument ||
+        !gImageCacheDb || !bounds) return;
+    first = -1;
+    second = -1;
+    lastAbove = -1;
+    top = gDocument->scrollY;
+    bottom = top + bounds->extent.y;
+    for (i = 0; i < gDocument->itemCount; ++i) {
+        item = &gDocument->items[i];
+        if (item->kind != docItemImage) continue;
+        if (item->y + item->height < top) {
+            lastAbove = (Int16)i;
+            continue;
+        }
+        if (first < 0) first = (Int16)i;
+        if (item->y <= bottom) break;
+        break;
+    }
+    if (first < 0) first = lastAbove;
+    if (first >= 0) {
+        for (i = (UInt16)first + 1; i < gDocument->itemCount; ++i) {
+            if (gDocument->items[i].kind == docItemImage) {
+                second = (Int16)i;
+                break;
+            }
+        }
+    }
+    gLazyDecodeBusy = true;
+    SafeCopy(savedStatus, gCurrentStatus, sizeof(savedStatus));
+    for (i = 0; i < gDocument->itemCount; ++i) {
+        item = &gDocument->items[i];
+        if (item->kind == docItemImage && item->bitmap &&
+            !WantedImageItem(i, first, second)) {
+            BmpDelete(item->bitmap);
+            item->bitmap = NULL;
+        }
+    }
+    if (first >= 0 || second >= 0) {
+        SetStatus("Decoding visible image...");
+        GifPrepareDecoder();
+    }
+    if (first >= 0 && !gDocument->items[first].bitmap)
+        gDocument->items[first].bitmap =
+            DecodeCachedImage(gDocument->items[first].imageIndex);
+    if (!gAbortRequested && second >= 0 && !gDocument->items[second].bitmap)
+        gDocument->items[second].bitmap =
+            DecodeCachedImage(gDocument->items[second].imageIndex);
+    GifReleaseDecoder();
+    SetStatus(savedStatus);
+    gLazyDecodeBusy = false;
+}
+
+static BitmapType *CachedImagePlaceholder(const Char *url, void *context,
+                                           UInt16 *widthOut, UInt16 *heightOut,
+                                           UInt16 *imageIndexOut)
+{
+    UInt16 *indexP;
+    UInt16 index;
+    CachedImageInfo *info;
+    (void)url;
+    indexP = (UInt16 *)context;
+    index = (*indexP)++;
+    if (index >= gCachedImageCount) return NULL;
+    info = &gCachedImages[index];
+    if (!info->valid) return NULL;
+    *widthOut = info->width;
+    *heightOut = info->height;
+    *imageIndexOut = index;
+    return NULL;
 }
 
 static Boolean ReplaceWithImageDocument(const Char *html, const Char *baseUrl)
 {
-    Document *candidate;
-    Document *previous;
     RectangleType bounds;
     Coord savedScroll;
-    candidate = (Document *)MemPtrNew(sizeof(Document));
-    if (!candidate) return false;
-    DocumentInit(candidate);
-    if (!DocumentParse(candidate, html, baseUrl, LoadGifForDocument, NULL,
-                       LoadingEventPump, NULL)) {
-        DocumentFree(candidate);
-        MemPtrFree(candidate);
+    UInt16 imageIndex;
+    UInt16 placeholderIndex;
+    Char imageUrl[512];
+
+    imageIndex = 0;
+    if (!ResetImageCache()) {
+        SafeCopy(gLastImageError, "Could not create temporary GIF cache.",
+                 sizeof(gLastImageError));
         return false;
     }
+    while (imageIndex < IMAGE_CACHE_MAX &&
+           DocumentImageUrlAt(html, baseUrl, imageIndex, imageUrl,
+                              sizeof(imageUrl))) {
+        CacheGif(imageUrl);
+        imageIndex++;
+        if (gAbortRequested) return false;
+    }
+
     savedScroll = gDocument->scrollY;
-    previous = gDocument;
-    gDocument = candidate;
+    placeholderIndex = 0;
+    if (!DocumentParse(gDocument, html, baseUrl, CachedImagePlaceholder,
+                       &placeholderIndex,
+                       LoadingEventPump, NULL)) {
+        return false;
+    }
+    gImageCacheReady = true;
     gDocument->scrollY = savedScroll;
     if (GetPageBounds(&bounds)) DocumentScroll(gDocument, 0, bounds.extent.y);
-    DocumentFree(previous);
-    MemPtrFree(previous);
     return true;
 }
 
@@ -955,6 +1231,18 @@ static void PushHistory(const Char *url)
     gHistoryPosition = gHistoryCount;
 }
 
+static void EnsureDefaultBookmark(void)
+{
+    UInt16 i;
+    BookmarkType *bookmark;
+    for (i = 0; i < gBookmarkCount; ++i)
+        if (StrCompare(gBookmarks[i].url, DEFAULT_BOOKMARK_URL) == 0) return;
+    if (gBookmarkCount >= BOOKMARK_MAX) return;
+    bookmark = &gBookmarks[gBookmarkCount++];
+    SafeCopy(bookmark->title, DEFAULT_BOOKMARK_TITLE, sizeof(bookmark->title));
+    SafeCopy(bookmark->url, DEFAULT_BOOKMARK_URL, sizeof(bookmark->url));
+}
+
 static void LoadPreferences(void)
 {
     SavedPreferencesType *saved;
@@ -962,12 +1250,23 @@ static void LoadPreferences(void)
     Int16 version;
     gImagesEnabled = true;
     SafeCopy(gHomeUrl, DEFAULT_HOME_URL, sizeof(gHomeUrl));
+#ifdef RETROWEB_BUILD
+    gProxyEnabled = true;
+#else
+    gProxyEnabled = false;
+#endif
+    SafeCopy(gProxyHost, DEFAULT_PROXY_HOST, sizeof(gProxyHost));
+    gProxyPort = DEFAULT_PROXY_PORT;
     size = sizeof(SavedPreferencesType);
     saved = (SavedPreferencesType *)MemPtrNew(size);
-    if (!saved) return;
+    if (!saved) {
+        EnsureDefaultBookmark();
+        return;
+    }
     MemSet(saved, size, 0);
     version = PrefGetAppPreferences(PREF_CREATOR, PREF_ID, saved, &size, true);
-    if (version == PREF_VERSION && saved->version == PREF_VERSION) {
+    if ((version == 2 || version == PREF_VERSION) &&
+        (saved->version == 2 || saved->version == PREF_VERSION)) {
         gBookmarkCount = saved->bookmarkCount;
         if (gBookmarkCount > BOOKMARK_MAX) gBookmarkCount = BOOKMARK_MAX;
         MemMove(gBookmarks, saved->bookmarks, sizeof(gBookmarks));
@@ -978,8 +1277,21 @@ static void LoadPreferences(void)
         gImagesEnabled = saved->imagesEnabled != 0;
         if (saved->homeUrl[0])
             SafeCopy(gHomeUrl, saved->homeUrl, sizeof(gHomeUrl));
+        if (version == PREF_VERSION && saved->version == PREF_VERSION) {
+            gProxyEnabled = saved->proxyEnabled != 0;
+            if (saved->proxyHost[0])
+                SafeCopy(gProxyHost, saved->proxyHost, sizeof(gProxyHost));
+            if (saved->proxyPort) gProxyPort = saved->proxyPort;
+        }
     }
     MemPtrFree(saved);
+#ifndef RETROWEB_BUILD
+    /* Migrate the former RetroModem-only default without overriding a home
+     * page the user chose themselves. */
+    if (StrCompare(gHomeUrl, "http://search.retromodem/") == 0)
+        SafeCopy(gHomeUrl, DEFAULT_HOME_URL, sizeof(gHomeUrl));
+#endif
+    EnsureDefaultBookmark();
 }
 
 static void SavePreferences(void)
@@ -995,6 +1307,9 @@ static void SavePreferences(void)
     MemMove(saved->history, gHistory, sizeof(gHistory));
     saved->imagesEnabled = gImagesEnabled ? 1 : 0;
     SafeCopy(saved->homeUrl, gHomeUrl, sizeof(saved->homeUrl));
+    saved->proxyEnabled = gProxyEnabled ? 1 : 0;
+    SafeCopy(saved->proxyHost, gProxyHost, sizeof(saved->proxyHost));
+    saved->proxyPort = gProxyPort;
     PrefSetAppPreferences(PREF_CREATOR, PREF_ID, PREF_VERSION, saved,
                           sizeof(SavedPreferencesType), true);
     MemPtrFree(saved);
@@ -1120,11 +1435,9 @@ static Boolean Navigate(const Char *url, Boolean addHistory)
     UInt32 htmlLength;
 
     if (!url || !url[0]) return false;
-    if (StartsWith(url, "http://")
-#ifdef RETROWEB_BUILD
-        || StartsWith(url, "https://")
-#endif
-       ) SafeCopy(normalized, url, sizeof(normalized));
+    if (StartsWith(url, "http://") ||
+        (gProxyEnabled && StartsWith(url, "https://")))
+        SafeCopy(normalized, url, sizeof(normalized));
     else {
         if (StrLen(url) + 8 > sizeof(normalized)) return false;
         StrCopy(normalized, "http://");
@@ -1187,7 +1500,7 @@ static Boolean Navigate(const Char *url, Boolean addHistory)
     if (gImagesEnabled) {
         SetStatus("Loading inline images...");
         ReplaceWithImageDocument(html, gWorkUrl);
-    }
+    } else CloseImageCache(true);
     MemPtrFree(html);
     DrawDocument();
     if (gLastRequestAborted || gAbortRequested) {
@@ -1205,7 +1518,7 @@ static Boolean Navigate(const Char *url, Boolean addHistory)
     }
     if (!gImagesEnabled) SetStatus("Page loaded - images are off");
     else if (gImageAttemptCount)
-        StrPrintF(gStatusScratch, "Page loaded - %u/%u images",
+        StrPrintF(gStatusScratch, "Page loaded - %u/%u cached",
                   gImageLoadedCount, gImageAttemptCount), SetStatus(gStatusScratch);
     else SetStatus(gLastResponseLimited ? "Page loaded - 60 KB limit reached" : "Page loaded - no images found");
     return true;
@@ -1218,7 +1531,9 @@ static Boolean NavigatePost(const Char *url, const Char *postBody)
     Char *html;
     UInt32 htmlLength;
     if (!url || !url[0]) return false;
-    if (StartsWith(url, "http://")) SafeCopy(normalized, url, sizeof(normalized));
+    if (StartsWith(url, "http://") ||
+        (gProxyEnabled && StartsWith(url, "https://")))
+        SafeCopy(normalized, url, sizeof(normalized));
     else return false;
     SetAddress(normalized);
     PushHistory(normalized);
@@ -1272,7 +1587,7 @@ static Boolean NavigatePost(const Char *url, const Char *postBody)
     if (gImagesEnabled) {
         SetStatus("Loading inline images...");
         ReplaceWithImageDocument(html, normalized);
-    }
+    } else CloseImageCache(true);
     MemPtrFree(html);
     DrawDocument();
     if (gLastRequestAborted || gAbortRequested) {
@@ -1290,7 +1605,7 @@ static Boolean NavigatePost(const Char *url, const Char *postBody)
     }
     if (!gImagesEnabled) SetStatus("Page loaded - images are off");
     else if (gImageAttemptCount)
-        StrPrintF(gStatusScratch, "Page loaded - %u/%u images",
+        StrPrintF(gStatusScratch, "Page loaded - %u/%u cached",
                   gImageLoadedCount, gImageAttemptCount), SetStatus(gStatusScratch);
     else SetStatus(gLastResponseLimited ? "Page loaded - 60 KB limit reached" : "Page loaded - no images found");
     return true;
@@ -1324,6 +1639,10 @@ static Boolean HandleMenu(UInt16 itemID)
     Char info[480];
     Char sizeText[16];
     Err networkError;
+    UInt32 heapFree;
+    UInt32 heapLargest;
+    UInt16 activeBitmaps;
+    UInt16 itemIndex;
     switch (itemID) {
     case MenuAbout:
         FrmAlert(AboutAlert);
@@ -1341,29 +1660,51 @@ static Boolean HandleMenu(UInt16 itemID)
         FrmPopupForm(PreferencesForm);
         return true;
     case MenuPageInfo:
-        StrIToA(sizeText, gLastResponseBytes);
         StrCopy(info, gDocument && gDocument->title[0] ? gDocument->title : "Untitled page");
-        StrCat(info, "\n\nAddress:\n");
-        StrNCat(info, gCurrentUrl, 120);
-        StrCat(info, "\n\nHTML bytes: ");
-        StrCat(info, sizeText);
-        StrCat(info, " / ");
-        StrIToA(sizeText, gLastExpectedBytes);
-        StrCat(info, sizeText);
-        StrCat(info, "\nDocument height: ");
-        StrIToA(sizeText, gDocument ? gDocument->contentHeight : 0);
-        StrCat(info, sizeText);
-        StrCat(info, "\nImages loaded: ");
+        StrCat(info, "\n\nImages cached: ");
         StrIToA(sizeText, gImageLoadedCount);
         StrCat(info, sizeText);
         StrCat(info, " / ");
         StrIToA(sizeText, gImageAttemptCount);
         StrCat(info, sizeText);
+        activeBitmaps = 0;
+        if (gDocument) {
+            for (itemIndex = 0; itemIndex < gDocument->itemCount; ++itemIndex)
+                if (gDocument->items[itemIndex].kind == docItemImage &&
+                    gDocument->items[itemIndex].bitmap) activeBitmaps++;
+        }
+        StrCat(info, "\nActive bitmaps: ");
+        StrIToA(sizeText, activeBitmaps);
+        StrCat(info, sizeText);
         if (gLastImageError[0]) {
-            StrCat(info, "\nLast image error: ");
+            StrCat(info, "\nLast error: ");
             StrNCat(info, gLastImageError, 63);
         }
+        StrCat(info, "\nHTML: ");
+        StrIToA(sizeText, gLastResponseBytes);
+        StrCat(info, sizeText);
+        StrCat(info, " / ");
+        StrIToA(sizeText, gLastExpectedBytes);
+        StrCat(info, sizeText);
+        StrCat(info, " bytes\nHeight: ");
+        StrIToA(sizeText, gDocument ? gDocument->contentHeight : 0);
+        StrCat(info, sizeText);
+        heapFree = 0;
+        heapLargest = 0;
+        if (gDocument)
+            MemHeapFreeBytes(MemPtrHeapID(gDocument), &heapFree, &heapLargest);
+        StrCat(info, "\nHeap free/max: ");
+        StrIToA(sizeText, heapFree / 1024);
+        StrCat(info, sizeText);
+        StrCat(info, " / ");
+        StrIToA(sizeText, heapLargest / 1024);
+        StrCat(info, sizeText);
+        StrCat(info, " KB");
+        StrCat(info, "\n\nAddress:\n");
+        StrNCat(info, gCurrentUrl, 80);
         FrmCustomAlert(MessageAlert, info, "", "");
+        DrawDocument();
+        SetStatus(gCurrentStatus);
         return true;
     case MenuOpenAddress:
         FrmPopupForm(AddressForm);
@@ -1421,8 +1762,15 @@ static Boolean PreferencesFormHandleEvent(EventType *eventP)
 {
     FormType *formP;
     ControlType *checkboxP;
+    ControlType *proxyCheckboxP;
     FieldType *homeFieldP;
+    FieldType *proxyHostFieldP;
+    FieldType *proxyPortFieldP;
     Char *homeValue;
+    Char *proxyHostValue;
+    Char *proxyPortValue;
+    Char portText[8];
+    Int32 portNumber;
     switch (eventP->eType) {
     case frmOpenEvent:
         formP = FrmGetActiveForm();
@@ -1430,6 +1778,17 @@ static Boolean PreferencesFormHandleEvent(EventType *eventP)
         checkboxP = (ControlType *)FrmGetObjectPtr(formP,
                     FrmGetObjectIndex(formP, ImagesCheckbox));
         CtlSetValue(checkboxP, gImagesEnabled);
+        proxyCheckboxP = (ControlType *)FrmGetObjectPtr(formP,
+                         FrmGetObjectIndex(formP, ProxyCheckbox));
+        CtlSetValue(proxyCheckboxP, gProxyEnabled);
+        proxyHostFieldP = (FieldType *)FrmGetObjectPtr(formP,
+                          FrmGetObjectIndex(formP, ProxyHostField));
+        ReplaceFieldText(proxyHostFieldP, gProxyHost);
+        proxyPortFieldP = (FieldType *)FrmGetObjectPtr(formP,
+                          FrmGetObjectIndex(formP, ProxyPortField));
+        if (gProxyPort) StrIToA(portText, gProxyPort);
+        else portText[0] = '\0';
+        ReplaceFieldText(proxyPortFieldP, portText);
         homeFieldP = (FieldType *)FrmGetObjectPtr(formP,
                      FrmGetObjectIndex(formP, HomeUrlField));
         ReplaceFieldText(homeFieldP, gHomeUrl);
@@ -1440,6 +1799,28 @@ static Boolean PreferencesFormHandleEvent(EventType *eventP)
             checkboxP = (ControlType *)FrmGetObjectPtr(formP,
                         FrmGetObjectIndex(formP, ImagesCheckbox));
             gImagesEnabled = CtlGetValue(checkboxP) != 0;
+            proxyCheckboxP = (ControlType *)FrmGetObjectPtr(formP,
+                             FrmGetObjectIndex(formP, ProxyCheckbox));
+            proxyHostFieldP = (FieldType *)FrmGetObjectPtr(formP,
+                              FrmGetObjectIndex(formP, ProxyHostField));
+            proxyPortFieldP = (FieldType *)FrmGetObjectPtr(formP,
+                              FrmGetObjectIndex(formP, ProxyPortField));
+            proxyHostValue = proxyHostFieldP ? FldGetTextPtr(proxyHostFieldP) : NULL;
+            proxyPortValue = proxyPortFieldP ? FldGetTextPtr(proxyPortFieldP) : NULL;
+            portNumber = proxyPortValue ? StrAToI(proxyPortValue) : 0;
+            if (CtlGetValue(proxyCheckboxP) &&
+                (!proxyHostValue || !proxyHostValue[0] ||
+                 portNumber < 1 || portNumber > 65535)) {
+                FrmCustomAlert(MessageAlert, "Enter a proxy host and a port from 1 to 65535.", "", "");
+                return true;
+            }
+            gProxyEnabled = CtlGetValue(proxyCheckboxP) != 0;
+            if (proxyHostValue && proxyHostValue[0])
+                SafeCopy(gProxyHost, proxyHostValue, sizeof(gProxyHost));
+            if (portNumber >= 1 && portNumber <= 65535)
+                gProxyPort = (UInt16)portNumber;
+            gCachedHost[0] = '\0';
+            gCachedHostAddress = 0;
             homeFieldP = (FieldType *)FrmGetObjectPtr(formP,
                          FrmGetObjectIndex(formP, HomeUrlField));
             homeValue = homeFieldP ? FldGetTextPtr(homeFieldP) : NULL;
@@ -1528,17 +1909,11 @@ static Boolean MainFormHandleEvent(EventType *eventP)
         break;
     case keyDownEvent:
         if (eventP->data.keyDown.chr == pageUpChr) {
-            if (GetPageBounds(&bounds)) {
-                DocumentScroll(gDocument, -bounds.extent.y + 12, bounds.extent.y);
-                DrawDocument();
-            }
+            ScrollPageStep(false);
             return true;
         }
         if (eventP->data.keyDown.chr == pageDownChr) {
-            if (GetPageBounds(&bounds)) {
-                DocumentScroll(gDocument, bounds.extent.y - 12, bounds.extent.y);
-                DrawDocument();
-            }
+            ScrollPageStep(true);
             return true;
         }
         break;
@@ -1720,12 +2095,21 @@ static void RemoveOlderApplicationDatabases(void)
 static Err AppStart(void)
 {
     UInt32 romVersion;
+    const Char *cacheName;
     FtrGet(sysFtrCreator, sysFtrNumROMVersion, &romVersion);
     if (romVersion < sysMakeROMVersion(4, 0, 0, sysROMStageRelease, 0)) {
         FrmAlert(AboutAlert);
         return sysErrRomIncompatible;
     }
     RemoveOlderApplicationDatabases();
+#ifdef RETROWEB_BUILD
+    cacheName = "RetroWEB GIF Cache";
+#else
+    cacheName = "RBrowser GIF Cache";
+#endif
+    gImageCacheDbID = DmFindDatabase(0, cacheName);
+    if (gImageCacheDbID) DmDeleteDatabase(0, gImageCacheDbID);
+    gImageCacheDbID = 0;
     gCurrentUrl[0] = '\0';
     gDocument = (Document *)MemPtrNew(sizeof(Document));
     if (!gDocument) return memErrNotEnoughSpace;
@@ -1743,6 +2127,7 @@ static void AppStop(void)
         MemPtrFree(gDocument);
         gDocument = NULL;
     }
+    CloseImageCache(true);
     FrmCloseAllForms();
 }
 

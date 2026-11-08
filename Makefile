@@ -2,10 +2,10 @@ MODEM_APP := RBrowser
 WEB_APP := RetroWEBBrowser
 MODEM_CREATOR := RwBr
 WEB_CREATOR := RtWB
-MODEM_DB_NAME := RBrowser 0.1.22
-WEB_DB_NAME := RetroWEB 0.1.22
-MODEM_DB_VERSION := 32
-WEB_DB_VERSION := 32
+MODEM_DB_NAME := RBrowser 0.1.34
+WEB_DB_NAME := RetroWEB 0.1.34
+MODEM_DB_VERSION := 44
+WEB_DB_VERSION := 44
 BUILD := build
 MODEM_BUILD := $(BUILD)/modem
 WEB_BUILD := $(BUILD)/retroweb
@@ -13,15 +13,19 @@ DIST := dist
 SDK := /opt/palmdev/sdk-4
 
 CC := m68k-palmos-gcc
-PILRC := pilrc
+# PilRC 3.2 stores BMP dimensions in C long. Its stock 64-bit Linux build
+# consequently misreads every icon bitmap header. This project-local build
+# uses fixed 32-bit BMP fields and is run inside the amd64 build container.
+PILRC := $(CURDIR)/tools/pilrc-3.2-fixed
 OBJRES := m68k-palmos-obj-res
 BUILDPRC := build-prc
 
-COMMON_CFLAGS := -O2 -Wall -Wno-unused -palmos4
+COMMON_CFLAGS := -Os -Wall -Wno-unused -palmos4
 COMMON_LDFLAGS := -lNetSocket -palmos4 -L$(SDK)/lib/m68k-palmos-coff
 SOURCES := src/main.c src/gif.c src/document.c
 HEADERS := src/gif.h src/document.h src/resources.h
 RESOURCE := resources/RetrowebBrowser.rcp
+BROWSER_ASSETS := assets/icon-1-32.bmp assets/icon-8.bmp
 
 .PHONY: all modem retroweb clean docker-build
 
@@ -51,13 +55,13 @@ $(WEB_BUILD)/$(WEB_APP): $(SOURCES) $(HEADERS) $(WEB_BUILD)/palmos.specs
 		$(SOURCES) -o $@ $(COMMON_LDFLAGS) \
 		-specs=$(CURDIR)/$(WEB_BUILD)/palmos.specs
 
-$(DIST)/$(MODEM_APP).prc: $(MODEM_BUILD)/$(MODEM_APP) $(RESOURCE) | $(DIST)
+$(DIST)/$(MODEM_APP).prc: $(MODEM_BUILD)/$(MODEM_APP) $(RESOURCE) $(BROWSER_ASSETS) | $(DIST)
 	cd $(MODEM_BUILD) && $(OBJRES) $(MODEM_APP)
 	cd $(MODEM_BUILD) && $(PILRC) -I ../../src ../../$(RESOURCE)
 	cd $(MODEM_BUILD) && $(BUILDPRC) --ok-to-install-newer -v $(MODEM_DB_VERSION) \
 		../../$@ "$(MODEM_DB_NAME)" $(MODEM_CREATOR) *.grc *.bin
 
-$(DIST)/$(WEB_APP).prc: $(WEB_BUILD)/$(WEB_APP) $(RESOURCE) | $(DIST)
+$(DIST)/$(WEB_APP).prc: $(WEB_BUILD)/$(WEB_APP) $(RESOURCE) $(BROWSER_ASSETS) | $(DIST)
 	cd $(WEB_BUILD) && $(OBJRES) $(WEB_APP)
 	cd $(WEB_BUILD) && $(PILRC) -I ../../src -D RETROWEB_BUILD ../../$(RESOURCE)
 	cd $(WEB_BUILD) && $(BUILDPRC) --ok-to-install-newer -v $(WEB_DB_VERSION) \

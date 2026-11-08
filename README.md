@@ -24,11 +24,13 @@ resolution and enlarged with nearest-neighbour scaling for display on GitHub.
 - addresses entered in the browser are automatically opened through RetroWEB
 - basic HTML 2.0-style text, headings, lists, rules and links
 - first-frame GIF87a/GIF89a image support
+- temporary Palm-database GIF cache with lazy 8-bit bitmap decoding
 - progressive rendering with tappable links and scrolling during downloads
 - GET and POST forms
 - bookmarks and history
 - Back, Forward, Home and Reload commands
 - configurable home page, stored separately for each browser profile
+- configurable HTTP forwarding proxy, including HTTPS targets through a proxy
 - pen-operated scrollbar and hardware Page Up/Page Down support
 - explicit Connect and Disconnect commands
 - Palm OS 4.0/4.1 and 68K support
@@ -43,20 +45,24 @@ with Palm Desktop, HotSync or another PRC installer.
 The launcher name is **RetroWEB**. Its home page is:
 
 ```text
-http://retroweb.bjrno.com/?img=inline
+http://retroweb.bjrno.com/
 ```
 
-The RetroModem companion build now uses the same default. In either build the
-home page can be changed under **Options > Preferences**. Because the two
-profiles use separate preference databases, each can keep its own home page.
+The standalone build uses the RetroWEB forwarding proxy at
+`retroweb.bjrno.com:8081` by default. Entered HTTP and HTTPS addresses are sent
+as ordinary absolute proxy requests; the address shown in the browser remains
+the address entered by the user.
 
-When an address such as `https://example.com/` is entered, the browser fetches:
+The RetroModem companion build, **RBrowser**, uses the same default home page:
 
 ```text
-http://retroweb.bjrno.com/proxy.php?url=https%3A%2F%2Fexample.com%2F&img=inline
+http://retroweb.bjrno.com/
 ```
 
-The address field continues to show the address entered by the user.
+Its proxy is disabled and its proxy fields are empty by default because
+RetroModem normally handles forwarding itself. Both builds can enable or
+disable the proxy and configure its host, port and home page under
+**Options > Preferences**. Their settings are stored separately.
 
 ## Build
 
@@ -72,7 +78,8 @@ This creates two independent applications:
 - `dist/RetroWEBBrowser.prc`: public RetroWEB-powered browser (`RtWB`)
 - `dist/RBrowser.prc`: RetroModem companion build (`RwBr`)
 
-Build only one profile with `make retroweb` or `make modem` inside the toolchain.
+Build only one profile with `make retroweb` or `make modem`
+inside the toolchain.
 The two applications use separate Palm creator IDs and preference databases,
 so they can be installed side by side.
 
@@ -80,7 +87,7 @@ so they can be installed side by side.
 
 - no native HTTPS; RetroWEB performs HTTPS fetching
 - GIF only; animated GIFs display their first frame
-- at most four decoded inline images per page
+- inline image count is governed by RetroWEB's device memory budget
 - 60 KB response limit
 - deliberately small, bounded HTML renderer rather than a full browser engine
 
