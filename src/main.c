@@ -17,17 +17,16 @@ Err errno;
 
 #ifdef RETROWEB_BUILD
 #define APP_NAME             "RetroWEB Browser"
-#define APP_VERSION          "0.1.21"
-#define HOME_URL             "http://retroweb.bjrno.com/?img=inline"
-#define USER_AGENT           "RetroWEBBrowser/0.1.21 (PalmOS 4)"
+#define APP_VERSION          "0.1.22"
+#define USER_AGENT           "RetroWEBBrowser/0.1.22 (PalmOS 4)"
 #define PREF_CREATOR         'RtWB'
 #else
 #define APP_NAME             "RetroModem Browser"
-#define APP_VERSION          "0.1.21"
-#define HOME_URL             "http://search.retromodem/"
-#define USER_AGENT           "RetroModemBrowser/0.1.21 (PalmOS 4)"
+#define APP_VERSION          "0.1.22"
+#define USER_AGENT           "RetroModemBrowser/0.1.22 (PalmOS 4)"
 #define PREF_CREATOR         'RwBr'
 #endif
+#define DEFAULT_HOME_URL     "http://retroweb.bjrno.com/?img=inline"
 #define HTTP_PORT            80
 #define ADDRESS_MAX          255
 #define HISTORY_MAX          8
@@ -51,10 +50,11 @@ typedef struct {
     UInt16 historyCount;
     Char history[HISTORY_MAX][ADDRESS_MAX + 1];
     UInt8 imagesEnabled;
-    Char legacyReserved[256];
+    Char homeUrl[ADDRESS_MAX + 1];
 } SavedPreferencesType;
 
 static Char gCurrentUrl[ADDRESS_MAX + 1];
+static Char gHomeUrl[ADDRESS_MAX + 1];
 static Char gHistory[HISTORY_MAX][ADDRESS_MAX + 1];
 static UInt16 gHistoryCount = 0;
 static UInt16 gHistoryPosition = 0;
@@ -961,6 +961,7 @@ static void LoadPreferences(void)
     UInt16 size;
     Int16 version;
     gImagesEnabled = true;
+    SafeCopy(gHomeUrl, DEFAULT_HOME_URL, sizeof(gHomeUrl));
     size = sizeof(SavedPreferencesType);
     saved = (SavedPreferencesType *)MemPtrNew(size);
     if (!saved) return;
@@ -975,6 +976,8 @@ static void LoadPreferences(void)
         MemMove(gHistory, saved->history, sizeof(gHistory));
         gHistoryPosition = gHistoryCount;
         gImagesEnabled = saved->imagesEnabled != 0;
+        if (saved->homeUrl[0])
+            SafeCopy(gHomeUrl, saved->homeUrl, sizeof(gHomeUrl));
     }
     MemPtrFree(saved);
 }
@@ -991,6 +994,7 @@ static void SavePreferences(void)
     saved->historyCount = gHistoryCount;
     MemMove(saved->history, gHistory, sizeof(gHistory));
     saved->imagesEnabled = gImagesEnabled ? 1 : 0;
+    SafeCopy(saved->homeUrl, gHomeUrl, sizeof(saved->homeUrl));
     PrefSetAppPreferences(PREF_CREATOR, PREF_ID, PREF_VERSION, saved,
                           sizeof(SavedPreferencesType), true);
     MemPtrFree(saved);
@@ -1365,7 +1369,7 @@ static Boolean HandleMenu(UInt16 itemID)
         FrmPopupForm(AddressForm);
         return true;
     case MenuHome:
-        Navigate(HOME_URL, true);
+        Navigate(gHomeUrl, true);
         return true;
     case MenuReload:
         Navigate(gCurrentUrl, false);
@@ -1417,6 +1421,8 @@ static Boolean PreferencesFormHandleEvent(EventType *eventP)
 {
     FormType *formP;
     ControlType *checkboxP;
+    FieldType *homeFieldP;
+    Char *homeValue;
     switch (eventP->eType) {
     case frmOpenEvent:
         formP = FrmGetActiveForm();
@@ -1424,6 +1430,9 @@ static Boolean PreferencesFormHandleEvent(EventType *eventP)
         checkboxP = (ControlType *)FrmGetObjectPtr(formP,
                     FrmGetObjectIndex(formP, ImagesCheckbox));
         CtlSetValue(checkboxP, gImagesEnabled);
+        homeFieldP = (FieldType *)FrmGetObjectPtr(formP,
+                     FrmGetObjectIndex(formP, HomeUrlField));
+        ReplaceFieldText(homeFieldP, gHomeUrl);
         return true;
     case ctlSelectEvent:
         if (eventP->data.ctlSelect.controlID == PreferencesOKButton) {
@@ -1431,6 +1440,13 @@ static Boolean PreferencesFormHandleEvent(EventType *eventP)
             checkboxP = (ControlType *)FrmGetObjectPtr(formP,
                         FrmGetObjectIndex(formP, ImagesCheckbox));
             gImagesEnabled = CtlGetValue(checkboxP) != 0;
+            homeFieldP = (FieldType *)FrmGetObjectPtr(formP,
+                         FrmGetObjectIndex(formP, HomeUrlField));
+            homeValue = homeFieldP ? FldGetTextPtr(homeFieldP) : NULL;
+            if (homeValue && homeValue[0])
+                SafeCopy(gHomeUrl, homeValue, sizeof(gHomeUrl));
+            else
+                SafeCopy(gHomeUrl, DEFAULT_HOME_URL, sizeof(gHomeUrl));
             SavePreferences();
             FrmReturnToForm(MainForm);
             return true;
@@ -1482,7 +1498,7 @@ static Boolean MainFormHandleEvent(EventType *eventP)
     case frmOpenEvent:
         formP = FrmGetActiveForm();
         FrmDrawForm(formP);
-        SetAddress(HOME_URL);
+        SetAddress(gHomeUrl);
         SetPageText("Opening home page...");
         {
             EventType deferredEvent;
@@ -1492,12 +1508,12 @@ static Boolean MainFormHandleEvent(EventType *eventP)
         }
         return true;
     case DeferredHomeEvent:
-        Navigate(HOME_URL, true);
+        Navigate(gHomeUrl, true);
         return true;
     case ctlSelectEvent:
         switch (eventP->data.ctlSelect.controlID) {
         case GoButton: GoFromAddressField(); return true;
-        case HomeButton: Navigate(HOME_URL, true); return true;
+        case HomeButton: Navigate(gHomeUrl, true); return true;
         case ReloadButton: Navigate(gCurrentUrl, false); return true;
         case BackButton: GoBack(); return true;
         case ForwardButton: GoForward(); return true;

@@ -28,6 +28,7 @@ resolution and enlarged with nearest-neighbour scaling for display on GitHub.
 - GET and POST forms
 - bookmarks and history
 - Back, Forward, Home and Reload commands
+- configurable home page, stored separately for each browser profile
 - pen-operated scrollbar and hardware Page Up/Page Down support
 - explicit Connect and Disconnect commands
 - Palm OS 4.0/4.1 and 68K support
@@ -44,6 +45,10 @@ The launcher name is **RetroWEB**. Its home page is:
 ```text
 http://retroweb.bjrno.com/?img=inline
 ```
+
+The RetroModem companion build now uses the same default. In either build the
+home page can be changed under **Options > Preferences**. Because the two
+profiles use separate preference databases, each can keep its own home page.
 
 When an address such as `https://example.com/` is entered, the browser fetches:
 

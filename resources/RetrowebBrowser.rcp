@@ -57,10 +57,10 @@ INFORMATION
 BEGIN
 #ifdef RETROWEB_BUILD
     TITLE "RetroWEB Browser"
-    MESSAGE "RetroWEB Browser 0.1.21\nA basic Palm OS web browser powered by RetroWEB.\n\nretroweb.bjrno.com"
+    MESSAGE "RetroWEB Browser 0.1.22\nA basic Palm OS web browser powered by RetroWEB.\n\nretroweb.bjrno.com"
 #else
     TITLE "RetroModem Browser"
-    MESSAGE "RetroModem Browser 0.1.21\nA Palm OS companion for RetroModem.\n\nsearch.retromodem"
+    MESSAGE "RetroModem Browser 0.1.22\nA Palm OS companion for RetroModem.\n\nretroweb.bjrno.com"
 #endif
     BUTTONS "OK"
 END
@@ -100,8 +100,10 @@ FORM ID PreferencesForm AT (0 0 160 160)
 BEGIN
     TITLE "Preferences"
     CHECKBOX "Load inline images" ID ImagesCheckbox AT (5 18 105 12) GROUP 0 USABLE LEFTANCHOR
-    BUTTON "Save" ID PreferencesOKButton AT (25 52 45 14) LEFTANCHOR FRAME FONT 0
-    BUTTON "Cancel" ID PreferencesCancelButton AT (88 52 48 14) LEFTANCHOR FRAME FONT 0
+    LABEL "Home page:" ID 1599 AT (5 39) FONT 0
+    FIELD ID HomeUrlField AT (5 52 150 42) FONT 0 MULTIPLELINES MAXCHARS 255 UNDERLINED
+    BUTTON "Save" ID PreferencesOKButton AT (25 108 45 14) LEFTANCHOR FRAME FONT 0
+    BUTTON "Cancel" ID PreferencesCancelButton AT (88 108 48 14) LEFTANCHOR FRAME FONT 0
     GRAFFITISTATEINDICATOR AT (145 150)
 END
 
@@ -116,10 +118,10 @@ BEGIN
 END
 
 #ifdef RETROWEB_BUILD
-VERSION ID 1 "0.1.21"
-VERSION ID 1000 "0.1.21"
+VERSION ID 1 "0.1.22"
+VERSION ID 1000 "0.1.22"
 #else
-VERSION ID 1 "0.1.21"
-VERSION ID 1000 "0.1.21"
+VERSION ID 1 "0.1.22"
+VERSION ID 1000 "0.1.22"
 #endif
 

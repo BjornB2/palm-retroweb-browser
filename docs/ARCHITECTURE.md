@@ -19,7 +19,10 @@ The default source is compiled twice:
 | Profile | Launcher | Creator | Home | External URL handling |
 | --- | --- | --- | --- | --- |
 | RetroWEB | RetroWEB | `RtWB` | `retroweb.bjrno.com` | URL-encoded through RetroWEB with inline images |
-| RetroModem | RBrowser | `RwBr` | `search.retromodem` | requested unchanged |
+| RetroModem | RBrowser | `RwBr` | `retroweb.bjrno.com` by default | requested unchanged |
+
+Both defaults can be changed under **Options > Preferences**. The configured
+home pages are stored in the profiles' separate Palm preference databases.
 
 The profiles have separate Palm database names, creator IDs and preferences,
 and therefore install side by side. The RetroModem profile deliberately keeps

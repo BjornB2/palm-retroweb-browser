@@ -47,6 +47,7 @@
 #define ImagesCheckbox       1502
 #define PreferencesOKButton  1503
 #define PreferencesCancelButton 1504
+#define HomeUrlField        1505
 
 #define AddressForm          1600
 #define AddressEntryField    1601
