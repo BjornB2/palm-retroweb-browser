@@ -18,16 +18,16 @@ Err errno;
 
 #ifdef RETROWEB_BUILD
 #define APP_NAME             "RetroWEB Browser"
-#define APP_VERSION          "0.1.34"
-#define USER_AGENT           "RetroWEBBrowser/0.1.34 (PalmOS 4)"
+#define APP_VERSION          "0.1.35"
+#define USER_AGENT_PRODUCT   "RetroWEBBrowser/0.1.35"
 #define PREF_CREATOR         'RtWB'
 #define DEFAULT_HOME_URL     "http://retroweb.bjrno.com/"
 #define DEFAULT_PROXY_HOST   "retroweb.bjrno.com"
 #define DEFAULT_PROXY_PORT   8081
 #else
 #define APP_NAME             "RetroModem Browser"
-#define APP_VERSION          "0.1.34"
-#define USER_AGENT           "RetroModemBrowser/0.1.34 (PalmOS 4)"
+#define APP_VERSION          "0.1.35"
+#define USER_AGENT_PRODUCT   "RetroModemBrowser/0.1.35"
 #define PREF_CREATOR         'RwBr'
 #define DEFAULT_HOME_URL     "http://retroweb.bjrno.com/"
 #define DEFAULT_PROXY_HOST   ""
@@ -121,6 +121,7 @@ static Char gPostAction[ADDRESS_MAX + 1];
 static Char gVisibleUrl[ADDRESS_MAX + 1];
 static Char gHttpPath[1024];
 static Char gHttpRequest[1400];
+static Char gUserAgent[96];
 static Char gHttpChunk[RECEIVE_CHUNK];
 static Char gHttpRedirect[1024];
 static Char gConnectionHost[128];
@@ -154,6 +155,26 @@ static void SafeCopy(Char *dest, const Char *src, UInt16 capacity)
     if (length >= capacity) length = capacity - 1;
     MemMove(dest, src, length);
     dest[length] = '\0';
+}
+
+static void BuildUserAgent(UInt32 romVersion)
+{
+    UInt32 deviceId;
+    Char device[5];
+    UInt16 i;
+    if (FtrGet(sysFtrCreator, sysFtrNumOEMDeviceID, &deviceId) == errNone) {
+        device[0] = (Char)(deviceId >> 24);
+        device[1] = (Char)(deviceId >> 16);
+        device[2] = (Char)(deviceId >> 8);
+        device[3] = (Char)deviceId;
+        device[4] = '\0';
+        for (i = 0; i < 4; ++i)
+            if (device[i] < 33 || device[i] > 126) device[i] = '_';
+    } else {
+        SafeCopy(device, "unknown", sizeof(device));
+    }
+    StrPrintF(gUserAgent, "%s (PalmOS %u; DeviceID %s)",
+              USER_AGENT_PRODUCT, (UInt16)(romVersion >> 24), device);
 }
 
 static FieldType *GetField(UInt16 id)
@@ -340,43 +361,27 @@ static Boolean LoadingEventPump(void *context)
 static Boolean ConnectResponsive(int socketDesc, struct sockaddr_in *server)
 {
     UInt16 nonBlocking;
-    UInt16 optionLength;
-    Int16 socketError;
-    Int16 ready;
-    fd_set writeSet;
-    struct timeval timeout;
     UInt32 started;
+    Boolean connected;
 
     nonBlocking = 1;
     if (setsockopt(socketDesc, SOL_SOCKET, netSocketOptSockNonBlocking,
                    &nonBlocking, sizeof(nonBlocking)) < 0) return false;
-    if (connect(socketDesc, (struct sockaddr *)server, sizeof(*server)) == 0)
-        ready = 1;
-    else {
+    started = TimGetTicks();
+    connected = false;
+    while (TimGetTicks() - started < (UInt32)SysTicksPerSecond() * 30) {
+        if (connect(socketDesc, (struct sockaddr *)server, sizeof(*server)) == 0 ||
+            errno == EISCONN) {
+            connected = true;
+            break;
+        }
         if (errno != EINPROGRESS && errno != EWOULDBLOCK && errno != EALREADY)
             return false;
-        ready = 0;
-    }
-    started = TimGetTicks();
-    while (!ready && TimGetTicks() - started < (UInt32)SysTicksPerSecond() * 30) {
         PumpLoadingEvents();
         if (gAbortRequested) return false;
-        FD_ZERO(&writeSet);
-        FD_SET(socketDesc, &writeSet);
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 0;
-        ready = select(socketDesc + 1, NULL, &writeSet, NULL, &timeout);
-        if (ready < 0 && errno != EWOULDBLOCK) return false;
-        if (ready <= 0) {
-            ready = 0;
-            SysTaskDelay(1);
-        }
+        SysTaskDelay(1);
     }
-    if (!ready) return false;
-    socketError = 0;
-    optionLength = sizeof(socketError);
-    if (getsockopt(socketDesc, SOL_SOCKET, netSocketOptSockErrorStatus,
-                   &socketError, &optionLength) < 0 || socketError) return false;
+    if (!connected) return false;
     nonBlocking = 0;
     if (setsockopt(socketDesc, SOL_SOCKET, netSocketOptSockNonBlocking,
                    &nonBlocking, sizeof(nonBlocking)) < 0) return false;
@@ -660,12 +665,13 @@ static Boolean HttpRequestInternal(const Char *url, const Char *method, const Ch
     if (postBody) {
         StrIToA(lengthText, StrLen(postBody));
         StrPrintF(gHttpRequest,
-                  "%s %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: " USER_AGENT "\r\nAccept: text/html,image/gif\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %s\r\nConnection: close\r\n\r\n",
-                  method, gProxyEnabled ? url : gHttpPath, host, lengthText);
+                  "%s %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: text/html,image/gif\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %s\r\nConnection: close\r\n\r\n",
+                  method, gProxyEnabled ? url : gHttpPath, host,
+                  gUserAgent, lengthText);
     } else {
         StrPrintF(gHttpRequest,
-                  "%s %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: " USER_AGENT "\r\nAccept: text/html,image/gif\r\nConnection: close\r\n\r\n",
-                  method, gProxyEnabled ? url : gHttpPath, host);
+                  "%s %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: text/html,image/gif\r\nConnection: close\r\n\r\n",
+                  method, gProxyEnabled ? url : gHttpPath, host, gUserAgent);
     }
     SetStatus("Sending page request...");
     if (send(socketDesc, gHttpRequest, StrLen(gHttpRequest), 0) < 0) {
@@ -2101,6 +2107,7 @@ static Err AppStart(void)
         FrmAlert(AboutAlert);
         return sysErrRomIncompatible;
     }
+    BuildUserAgent(romVersion);
     RemoveOlderApplicationDatabases();
 #ifdef RETROWEB_BUILD
     cacheName = "RetroWEB GIF Cache";
